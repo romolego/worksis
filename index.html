@@ -249,6 +249,7 @@ const S = {
   fwd: []
 };
 const aq = window.aq;
+const sourceTableState = { rendered: 0, chunk: 1500 };
 
 /* ====== DOM ====== */
 const el = {
@@ -281,6 +282,7 @@ const el = {
   chartsToolbar: document.getElementById("chartsToolbar"),
   ctxLabel: document.getElementById("ctxLabel"),
   tbodySrc: document.querySelector("#srcTable tbody"),
+  srcScroll: document.getElementById("srcScroll"),
   srcCount: document.getElementById("srcCount"),
   svgProj: document.getElementById("svgProj"),
   svgPeople: document.getElementById("svgPeople"),
@@ -326,7 +328,79 @@ function showError(err, extras){
   el.errText.textContent = lines.join("\n\n");
 }
 function clearError(){ el.errBox.style.display = "none"; el.errText.textContent = ""; }
-function hhmmToDec(s) { if (typeof s !== "string" || !s.includes(":")) return NaN; const [hh, mm] = s.split(":").map(x => parseInt(x||"0",10)); return (hh||0)+(mm||0)/60; }
+function normalizeHours(value){
+  const info = { value: 0, ok: false, missing: false, invalid: false, negative: false, malformed: false };
+  if (value == null || value === "") { info.missing = true; info.invalid = true; return info; }
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) {
+      info.value = value;
+      info.ok = true;
+      info.negative = value < 0;
+      return info;
+    }
+    info.invalid = true;
+    info.malformed = true;
+    return info;
+  }
+
+  let str = String(value).replace(/\u00A0/g, " ").replace(/[−–—]/g, "-").trim();
+  if (!str) { info.missing = true; info.invalid = true; return info; }
+
+  str = str.replace(/(час(ов|а)?|ч\.?|hrs?|hours?)/gi, "");
+  let sanitized = str.replace(/[^0-9.,:+-]/g, "");
+  if (!sanitized) { info.invalid = true; info.malformed = true; return info; }
+
+  let sign = 1;
+  if (sanitized.startsWith("-")) { sign = -1; sanitized = sanitized.slice(1); }
+  else if (sanitized.startsWith("+")) { sanitized = sanitized.slice(1); }
+  sanitized = sanitized.trim();
+
+  if (!sanitized) { info.missing = true; info.invalid = true; return info; }
+
+  if (sanitized.includes(":")) {
+    const parts = sanitized.split(":").map(p => p === "" ? "0" : p);
+    if (parts.length >= 2) {
+      const hh = parseInt(parts[0], 10);
+      const mm = parseInt(parts[1], 10);
+      const ss = parts.length > 2 ? parseInt(parts[2], 10) : 0;
+      if ([hh, mm, ss].every(n => Number.isFinite(n))) {
+        info.value = sign * ((hh || 0) + (mm || 0) / 60 + (ss || 0) / 3600);
+        info.ok = true;
+      }
+    }
+  }
+
+  if (!info.ok) {
+    let cleaned = sanitized;
+    if (cleaned.includes(",") && cleaned.includes(".")) {
+      const lastSep = Math.max(cleaned.lastIndexOf(","), cleaned.lastIndexOf("."));
+      const intPart = cleaned.slice(0, lastSep).replace(/[.,]/g, "");
+      const fracPart = cleaned.slice(lastSep + 1);
+      cleaned = intPart + "." + fracPart;
+    } else {
+      cleaned = cleaned.replace(/,/g, ".");
+      const firstDot = cleaned.indexOf(".");
+      if (firstDot !== -1) {
+        cleaned = cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, "");
+      }
+    }
+    if (cleaned) {
+      const num = Number(cleaned);
+      if (Number.isFinite(num)) {
+        info.value = sign * num;
+        info.ok = true;
+      }
+    }
+  }
+
+  info.negative = info.value < 0;
+  if (!info.ok) {
+    info.value = 0;
+    if (!info.missing) info.malformed = true;
+    info.invalid = true;
+  }
+  return info;
+}
 function downloadText(filename, text) { const blob=new Blob([text],{type:"text/plain;charset=utf-8;"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click(); URL.revokeObjectURL(a.href); a.remove(); }
 function escapeHtml(s){ return String(s||"").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function shortLabel(str, max=42){ const s = String(str||""); return s.length>max ? s.slice(0,max-1)+"…" : s; }
@@ -432,9 +506,8 @@ async function parseWorkbook(file, sheetIndex=-1){
     S.raw = rows.map(r => {
       let d = toISO(r && dateKey ? r[dateKey] : null);
       if (!d) d = "(нет даты)";
-      let h = (r && hoursKey ? r[hoursKey] : null);
-      if (typeof h === "string" && h.includes(":")) h = hhmmToDec(h);
-      h = parseFloat(h);
+      const hoursRaw = r && hoursKey ? r[hoursKey] : null;
+      const hInfo = normalizeHours(hoursRaw);
 
       const projDisp   = displayOf(r && projectKey ? r[projectKey] : null);
       const typeDisp   = displayOf(r && typeKey    ? r[typeKey]    : null);
@@ -445,7 +518,13 @@ async function parseWorkbook(file, sheetIndex=-1){
         projectDisp: projDisp, projectKey: normalizeKey(projDisp),
         typeDisp:    typeDisp, typeKey:    normalizeKey(typeDisp),
         personDisp:  personDisp, personKey: normalizeKey(personDisp),
-        hours: Number.isFinite(h) ? h : 0
+        hours: hInfo.value,
+        hoursValid: hInfo.ok,
+        hoursInvalid: hInfo.invalid,
+        hoursMissing: hInfo.missing,
+        hoursMalformed: hInfo.malformed,
+        hoursNegative: hInfo.negative,
+        hoursRaw: hoursRaw
       };
     });
 
@@ -646,8 +725,8 @@ function applyFiltersAndRender(initial=false) {
   if (pk !== "*") t = t.filter(aq.escape(d => d.projectKey === pk));
   if (tk !== "*") t = t.filter(aq.escape(d => d.typeKey    === tk));
   if (sk !== "*") t = t.filter(aq.escape(d => d.personKey  === sk));
-  if (d1) t = t.filter(aq.escape(d => d.date !== "(нет даты)" && d.date >= d1));
-  if (d2) t = t.filter(aq.escape(d => d.date !== "(нет даты)" && d.date <= d2));
+  if (d1) t = t.filter(aq.escape(d => d.date === "(нет даты)" || d.date >= d1));
+  if (d2) t = t.filter(aq.escape(d => d.date === "(нет даты)" || d.date <= d2));
 
   S.filtered = t.objects();
   renderAll(initial);
@@ -687,10 +766,23 @@ function setChartTitles(){
 function renderSourceTable(){
   el.tbodySrc.innerHTML = "";
   const rows = S.filtered;
-  el.srcCount.textContent = rows.length ? `Строк: ${rows.length}` : "Пусто";
+  sourceTableState.rendered = 0;
+  sourceTableState.total = rows.length;
+  el.srcCount.textContent = rows.length
+    ? `Строк: ${rows.length}${rows.length > sourceTableState.chunk ? " · прокрутите, чтобы увидеть все" : ""}`
+    : "Пусто";
+  el.srcScroll.scrollTop = 0;
+  appendSourceRows();
+}
+
+function appendSourceRows(){
+  const rows = S.filtered;
+  if (!rows.length) return;
+  if (sourceTableState.rendered >= rows.length) return;
   const frag = document.createDocumentFragment();
-  const cap = Math.min(rows.length, 2000);
-  for (let i=0;i<cap;i++){
+  const start = sourceTableState.rendered;
+  const end = Math.min(start + sourceTableState.chunk, rows.length);
+  for (let i=start;i<end;i++){
     const r = rows[i];
     const tr = document.createElement("tr");
     tr.innerHTML = `<td class="nowrap">${$esc(r.date)}</td>
@@ -701,6 +793,16 @@ function renderSourceTable(){
     frag.appendChild(tr);
   }
   el.tbodySrc.appendChild(frag);
+  sourceTableState.rendered = end;
+}
+
+function handleSourceScroll(){
+  if (!S.filtered.length) return;
+  if (sourceTableState.rendered >= S.filtered.length) return;
+  const node = el.srcScroll;
+  if (node.scrollTop + node.clientHeight >= node.scrollHeight - 24) {
+    appendSourceRows();
+  }
 }
 
 /* ====== KPI ====== */
@@ -1022,6 +1124,8 @@ function clearAll(){
 
   el.tbodySrc.innerHTML = "";
   el.srcCount.textContent = "—";
+  sourceTableState.rendered = 0;
+  sourceTableState.total = 0;
   el.kpis.style.display = "none";
   el.charts.style.display = "none";
   el.chartsToolbar.style.display = "none";
@@ -1327,12 +1431,20 @@ function renderReport(){
   }
 
   const quiet = detectQuietZones(byDayFull, 3);
+  const allZeros = byDayFull.length ? byDayFull.every(p=>!p.h) : false;
   if (quiet.length){
     lines.push(``); lines.push(`ТИХИЕ ЗОНЫ / НЕДОЗАГРУЗКА`);
     quiet.slice(0,10).forEach(z=>{
       lines.push(`• ${z.from} — ${z.to} (${z.len} дн.)`);
     });
     if (quiet.length>10) lines.push(`… и ещё ${quiet.length-10}`);
+  } else if (byDayFull.length){
+    lines.push(``); lines.push(`ТИХИЕ ЗОНЫ / НЕДОЗАГРУЗКА`);
+    if (allZeros){
+      lines.push(`• Все дни в выборке имеют 0 ч — проверьте качество данных или правила парсинга.`);
+    } else {
+      lines.push(`• Тихие зоны (≥3 дней подряд с 0 ч) не обнаружены.`);
+    }
   }
 
   const imbProj = imbalanceInfo(projTop.map(o=>({h:o.h, label:o.projectDisp})), 3, 0.60);
@@ -1345,22 +1457,31 @@ function renderReport(){
 
   // Проверки качества входных данных
   const dq = (function(){
-    let noDate=0, zeroH=0, negH=0, emptyProj=0, emptyType=0, emptyPerson=0;
+    let noDate=0, zeroValid=0, negH=0, emptyProj=0, emptyType=0, emptyPerson=0, invalid=0, missingHours=0, malformed=0;
     for (const r of S.filtered){
       if (!r.date || r.date==="(нет даты)") noDate++;
-      if (!Number.isFinite(r.hours) || r.hours===0) zeroH++;
-      if (Number.isFinite(r.hours) && r.hours<0) negH++;
+      if (r.hoursValid && r.hours===0) zeroValid++;
+      if (r.hoursValid && r.hours<0) negH++;
+      if (r.hoursInvalid) invalid++;
+      if (r.hoursMissing) missingHours++;
+      if (r.hoursMalformed) malformed++;
       if (!r.projectDisp || r.projectDisp==="(не задано)") emptyProj++;
       if (!r.typeDisp || r.typeDisp==="(не задано)") emptyType++;
       if (!r.personDisp || r.personDisp==="(не задано)") emptyPerson++;
     }
-    return {noDate, zeroH, negH, emptyProj, emptyType, emptyPerson};
+    return {noDate, zeroValid, negH, emptyProj, emptyType, emptyPerson, invalid, missingHours, malformed};
   })();
-  if (dq.noDate || dq.zeroH || dq.negH || dq.emptyProj || dq.emptyType || dq.emptyPerson){
+  if (dq.noDate || dq.zeroValid || dq.negH || dq.emptyProj || dq.emptyType || dq.emptyPerson || dq.malformed || dq.missingHours){
     lines.push(``); lines.push(`КАЧЕСТВО ДАННЫХ`);
     if (dq.noDate)     lines.push(`• Без даты: ${dq.noDate} записей`);
-    if (dq.zeroH)      lines.push(`• Нулевые часы: ${dq.zeroH} записей`);
+    if (dq.zeroValid)  lines.push(`• Нулевые часы: ${dq.zeroValid} записей`);
     if (dq.negH)       lines.push(`• Отрицательные часы: ${dq.negH} записей`);
+    const problemHours = dq.malformed + dq.missingHours;
+    if (problemHours){
+      lines.push(`• Проблемные значения часов: ${problemHours} записей`);
+      if (dq.malformed)    lines.push(`  ◦ не распознаны (формат): ${dq.malformed}`);
+      if (dq.missingHours) lines.push(`  ◦ пустые/отсутствуют: ${dq.missingHours}`);
+    }
     if (dq.emptyProj)  lines.push(`• Пустой проект: ${dq.emptyProj} записей`);
     if (dq.emptyType)  lines.push(`• Пустой вид работ: ${dq.emptyType} записей`);
     if (dq.emptyPerson)lines.push(`• Пустой исполнитель: ${dq.emptyPerson} записей`);
@@ -1379,6 +1500,7 @@ function renderReport(){
 /* ====== СВЯЗЬ ====== */
 el.file.addEventListener("change", (e)=>{ const f = e.target.files?.[0]; if (!f){ el.status.textContent = "Файл не выбран"; return; } S.stack.length=0; S.fwd.length=0; updateHistoryButtons(); parseWorkbook(f, -1); });
 el.btnExportRaw.addEventListener("click", exportCSVRaw);
+el.srcScroll.addEventListener("scroll", handleSourceScroll);
 
 window.addEventListener("load", ()=>{
   const ok = !!(window.XLSX && window.aq && window.dayjs);
