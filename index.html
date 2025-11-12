@@ -1071,120 +1071,310 @@ function contextLabel(){
 }
 function fileBase(){ return S.filename ? S.filename.replace(/\.[^.]+$/,"") : "export"; }
 
+
+
+
+/* ====== ВСПОМОГАТЕЛЬНЫЕ ДЛЯ ОТЧЁТА (новые) ====== */
+function fmtPct(v){ return Number.isFinite(v) ? (v*100).toFixed(1) + "%" : "0.0%"; }
+function safeSum(arr, f){ let s=0; for (const x of arr) s += f? (f(x)||0):(x||0); return s; }
+function listBlock(arr,total){
+  if (!arr || !arr.length) return "—";
+  const sum = total>0 ? total : safeSum(arr, r=>r.h||r.value||0) || 1;
+  return arr.map((r,i)=>{
+    const label = r.projectDisp ?? r.personDisp ?? r.typeDisp ?? r.label ?? r.date ?? "(не задано)";
+    const h = (r.h ?? r.value ?? 0);
+    const share = h/sum;
+    return `${String(i+1).padStart(2,"0")}. ${label}: ${h.toFixed(2)} ч (${(share*100).toFixed(1)}%)`;
+  }).join("\n");
+}
+function buildDailySeries(table){
+  const t = aq.from(table).filter(aq.escape(d=>d.date && d.date!=="(нет даты)"));
+  const objs = t.groupby("date").rollup({h:d=>aq.op.sum(d.hours)}).orderby("date").objects();
+  if (!objs.length) return [];
+  const minD = dayjs(objs[0].date);
+  const maxD = dayjs(objs[objs.length-1].date);
+  const map = new Map(objs.map(o=>[o.date, o.h]));
+  const res = [];
+  for (let d=minD; d.isBefore(maxD)||d.isSame(maxD,"day"); d=d.add(1,"day")){
+    const iso = d.format("YYYY-MM-DD");
+    res.push({date: iso, h: Number(map.get(iso)||0)});
+  }
+  return res;
+}
+function movingAvg(arr, w){
+  const out = Array(arr.length).fill(0);
+  let sum = 0;
+  for (let i=0;i<arr.length;i++){
+    sum += arr[i];
+    if (i>=w) sum -= arr[i-w];
+    out[i] = i>=w-1 ? sum/w : NaN;
+  }
+  return out;
+}
+function stddev(arr){
+  const v = arr.filter(Number.isFinite);
+  if (!v.length) return 0;
+  const m = v.reduce((a,b)=>a+b,0)/v.length;
+  const s2 = v.reduce((a,b)=>a+(b-m)*(b-m),0)/v.length;
+  return Math.sqrt(s2);
+}
+function detectAnomalies(series, w=7, k=1.5, kPct=1.3){
+  if (series.length < w+2) return [];
+  const vals = series.map(p=>p.h);
+  const res = [];
+  for (let i=w;i<vals.length;i++){
+    const window = vals.slice(i-w, i);
+    const mu = window.reduce((a,b)=>a+b,0)/w;
+    const sd = stddev(window);
+    const thr1 = mu + k*sd;
+    const thr2 = mu * kPct;
+    if (vals[i] > Math.max(thr1, thr2) && vals[i]>0){
+      res.push({date: series[i].date, h: vals[i], mu, sd});
+    }
+  }
+  return res;
+}
+function detectQuietZones(series, minLen=3){
+  if (!series.length) return [];
+  const zones = [];
+  let runStart = null, runLen = 0;
+  for (let i=0;i<series.length;i++){
+    if ((series[i].h||0)===0){
+      if (runStart==null) runStart = i;
+      runLen++;
+    } else {
+      if (runLen>=minLen) zones.push({from: series[runStart].date, to: series[i-1].date, len: runLen});
+      runStart = null; runLen = 0;
+    }
+  }
+  if (runLen>=minLen) zones.push({from: series[runStart].date, to: series[series.length-1].date, len: runLen});
+  return zones;
+}
+function imbalanceInfo(groups, topN=3, threshold=0.60){
+  const sorted = [...groups].sort((a,b)=>(b.h??b.value??0)-(a.h??a.value??0));
+  const total = safeSum(sorted, r=>r.h??r.value??0);
+  const top = sorted.slice(0, topN);
+  const topSum = safeSum(top, r=>r.h??r.value??0);
+  const share = total>0 ? topSum/total : 0;
+  return {trigger: share>=threshold, share, total, top};
+}
+function linearTrend(series){
+  const n = series.length;
+  if (n<8) return {ok:false};
+  const xs = Array.from({length:n}, (_,i)=>i+1);
+  const ys = series.map(p=>p.h);
+  const meanX = xs.reduce((a,b)=>a+b,0)/n;
+  const meanY = ys.reduce((a,b)=>a+b,0)/n;
+  let num=0, den=0;
+  for (let i=0;i<n;i++){ num += (xs[i]-meanX)*(ys[i]-meanY); den += (xs[i]-meanX)*(xs[i]-meanX); }
+  const slope = den===0 ? 0 : num/den;
+  const firstAvg = ys.slice(0, Math.max(3, Math.floor(n/4))).reduce((a,b)=>a+b,0)/Math.max(1, Math.max(3, Math.floor(n/4)));
+  const lastAvg  = ys.slice(n-Math.max(3, Math.floor(n/4))).reduce((a,b)=>a+b,0)/Math.max(1, Math.max(3, Math.floor(n/4)));
+  const change = firstAvg>0 ? (lastAvg-firstAvg)/firstAvg : (lastAvg>0?1:0);
+  return {ok:true, slope, change};
+}
+
+
+
+
+
+
+
 /* ====== АДАПТИВНЫЙ ТЕКСТОВЫЙ ОТЧЁТ ====== */
+
+
+/* ====== ПОЛНЫЙ АДАПТИВНЫЙ ОТЧЁТ (замена renderReport) ====== */
 function renderReport(){
   const t = aq.from(S.filtered);
   const totalHours = (t.rollup({h:d=>aq.op.sum(d.hours)}).objects()[0]||{h:0}).h||0;
   const recs = S.filtered.length;
-  const uniq = {
-    projects: [...new Set(S.filtered.map(r=>r.projectDisp))].filter(Boolean),
-    people:   [...new Set(S.filtered.map(r=>r.personDisp))].filter(Boolean),
-    types:    [...new Set(S.filtered.map(r=>r.typeDisp))].filter(Boolean),
-    days:     [...new Set(S.filtered.map(r=>r.date))].filter(d=>d && d!=="(нет даты)")
+  const uniqs = {
+    projects: Array.from(new Set(S.filtered.map(r=>r.projectDisp))).filter(Boolean),
+    people:   Array.from(new Set(S.filtered.map(r=>r.personDisp))).filter(Boolean),
+    types:    Array.from(new Set(S.filtered.map(r=>r.typeDisp))).filter(Boolean),
+    days:     Array.from(new Set(S.filtered.map(r=>r.date))).filter(d=>d && d!=="(нет даты)")
   };
-
   const pk = el.project.value, tk = el.type.value, sk = el.person.value;
+  const only = { person: sk!=='*' && pk==='*' && tk==='*',
+                 project: pk!=='*' && sk==='*' && tk==='*',
+                 type: tk!=='*' && pk==='*' && sk==='*' };
+  const comboCount = (pk!=='*') + (tk!=='*') + (sk!=='*');
   const ctx = contextLabel();
-  const byDay = t.filter(aq.escape(d=>d.date!=="(нет даты)")).groupby("date").rollup({h:d=>aq.op.sum(d.hours)}).orderby("date").objects();
-  const peak = byDay.length ? [...byDay].sort((a,b)=>b.h-a.h)[0] : null;
-  const avgPerDay = byDay.length ? (totalHours/byDay.length) : 0;
 
-  const block = [];
-  block.push(`ОТЧЁТ ПО ТЕКУЩЕЙ ВЫБОРКЕ${ctx ? ` — ${ctx}` : ""}`);
-  block.push(``);
-  block.push(`Сводные показатели:`);
-  block.push(`• Всего записей: ${recs}`);
-  block.push(`• Всего часов: ${fmt2(totalHours)}`);
-  block.push(`• Проектов: ${uniq.projects.length} · Исполнителей: ${uniq.people.length} · Видов работ: ${uniq.types.length} · Дней: ${uniq.days.length}`);
-  if (peak){ block.push(`• Пиковый день: ${peak.date} — ${fmt2(peak.h)} ч · Среднее по дню: ${fmt2(avgPerDay)} ч`); }
+  const lines = [];
+  // Заголовок
+  lines.push(`ОТЧЁТ ПО ТЕКУЩЕЙ ВЫБОРКЕ${ctx ? ` — ${ctx}` : ""}`);
+  lines.push(``);
 
-  // Базовые топы
+  // Краткая выжимка
+  const byDayFull = buildDailySeries(S.filtered);
+  const peak = byDayFull.length ? [...byDayFull].sort((a,b)=>b.h-a.h)[0] : null;
+  const avgPerDay = byDayFull.length ? (totalHours/byDayFull.length) : 0;
+  const trend = linearTrend(byDayFull);
+  const trendTxt = trend.ok ? (trend.change>0.05 ? `рост (${(trend.change*100).toFixed(1)}%)`
+                       : (trend.change<-0.05 ? `снижение (${(trend.change*100).toFixed(1)}%)` : `без выраженного тренда`))
+                       : `недостаточно точек для тренда`;
+  lines.push(`За период отработано ${totalHours.toFixed(2)} ч по ${uniqs.projects.length} проекта(м), ${uniqs.people.length} исполнител(ям), ${uniqs.types.length} виду(ам) работ.`);
+  if (peak) lines.push(`Пиковый день: ${peak.date} — ${peak.h.toFixed(2)} ч; среднее по дню: ${avgPerDay.toFixed(2)} ч; тренд: ${trendTxt}.`);
+  lines.push(``);
+
+  // Сводные
+  lines.push(`СВОДНЫЕ ПОКАЗАТЕЛИ`);
+  lines.push(`• Всего записей: ${recs}`);
+  lines.push(`• Дней с данными: ${uniqs.days.length}`);
+  lines.push(`• Разнообразие: проекты=${uniqs.projects.length} · исполнители=${uniqs.people.length} · виды=${uniqs.types.length}`);
+  lines.push(``);
+
+  // Фокусы/Комбинации
+  if (only.project){
+    const projName = labelByKey('project', pk);
+    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    lines.push(`ФОКУС: ПРОЕКТ — ${projName}`);
+    lines.push(`• Итого часов по проекту: ${totalHours.toFixed(2)}`);
+    lines.push(`• Топ исполнителей:`); lines.push(listBlock(byPers.slice(0,10), totalHours));
+    lines.push(`• Структура по видам работ:`); lines.push(listBlock(byType.slice(0,10), totalHours));
+    lines.push(``);
+  } else if (only.person){
+    const personName = labelByKey('person', sk);
+    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    lines.push(`ФОКУС: ИСПОЛНИТЕЛЬ — ${personName}`);
+    lines.push(`• Итого часов: ${totalHours.toFixed(2)}`);
+    lines.push(`• Распределение по проектам:`); lines.push(listBlock(byProj.slice(0,10), totalHours));
+    lines.push(`• Распределение по видам работ:`); lines.push(listBlock(byType.slice(0,10), totalHours));
+    lines.push(``);
+  } else if (only.type){
+    const typeName = labelByKey('type', tk);
+    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    lines.push(`ФОКУС: ВИД РАБОТ — ${typeName}`);
+    lines.push(`• Итого часов: ${totalHours.toFixed(2)}`);
+    lines.push(`• Проекты:`); lines.push(listBlock(byProj.slice(0,10), totalHours));
+    lines.push(`• Исполнители:`); lines.push(listBlock(byPers.slice(0,10), totalHours));
+    lines.push(``);
+  } else if (comboCount===2){
+    if (pk!=='*' && sk!=='*'){
+      const projName = labelByKey('project', pk);
+      const personName = labelByKey('person', sk);
+      const sum = (t.rollup({h:d=>aq.op.sum(d.hours)}).objects()[0]||{h:0}).h||0;
+      const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+      lines.push(`ФОКУС: ПРОЕКТ × ИСПОЛНИТЕЛЬ — ${projName} × ${personName}`);
+      lines.push(`• Итого часов по сочетанию: ${sum.toFixed(2)}`);
+      lines.push(`• Виды работ:`); lines.push(listBlock(byType.slice(0,10), sum||1));
+      lines.push(``);
+    }
+    if (pk!=='*' && tk!=='*' && sk==='*'){
+      const projName = labelByKey('project', pk);
+      const typeName = labelByKey('type', tk);
+      const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+      lines.push(`ФОКУС: ПРОЕКТ × ВИД — ${projName} × ${typeName}`);
+      lines.push(`• Исполнители:`); lines.push(listBlock(byPers.slice(0,10), totalHours));
+      lines.push(``);
+    }
+    if (tk!=='*' && sk!=='*' && pk==='*'){
+      const typeName = labelByKey('type', tk);
+      const personName = labelByKey('person', sk);
+      const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+      lines.push(`ФОКУС: ВИД × ИСПОЛНИТЕЛЬ — ${typeName} × ${personName}`);
+      lines.push(`• Проекты:`); lines.push(listBlock(byProj.slice(0,10), totalHours));
+      lines.push(``);
+    }
+  } else if (comboCount===3){
+    const projName = labelByKey('project', pk);
+    const typeName = labelByKey('type', tk);
+    const personName = labelByKey('person', sk);
+    lines.push(`УЗКИЙ ФОКУС: ${projName} × ${typeName} × ${personName}`);
+    lines.push(`• Итого часов по сочетанию: ${totalHours.toFixed(2)}`);
+    lines.push(``);
+  }
+
+  // Топ-списки
   const projTop = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects().slice(0,10);
   const peopTop = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects().slice(0,10);
   const typeTop = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects().slice(0,10);
+  lines.push(`TOP-10 ПРОЕКТОВ`);      lines.push(listBlock(projTop, totalHours)); lines.push(``);
+  lines.push(`TOP-10 ИСПОЛНИТЕЛЕЙ`);  lines.push(listBlock(peopTop, totalHours)); lines.push(``);
+  lines.push(`TOP-10 ВИДОВ РАБОТ`);   lines.push(listBlock(typeTop, totalHours)); lines.push(``);
 
-  // Сценарии
-  const only = {
-    person: sk!=='*' && pk==='*' && tk==='*',
-    project: pk!=='*' && sk==='*' && tk==='*',
-    type: tk!=='*' && pk==='*' && sk==='*'
-  };
-  const combo = (pk!=='*') + (tk!=='*') + (sk!=='*');
-
-  block.push(``);
-
-  if (only.person){
-    block.push(`Фокус: исполнитель — ${labelByKey('person', sk)}`);
-    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    block.push(`• Распределение часов по проектам:`);
-    block.push(listBlock(byProj, totalHours));
-    block.push(`• Распределение часов по видам работ:`);
-    block.push(listBlock(byType, totalHours));
-  } else if (only.project){
-    block.push(`Фокус: проект — ${labelByKey('project', pk)}`);
-    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    block.push(`• Топ исполнителей в проекте:`);
-    block.push(listBlock(byPers, totalHours));
-    block.push(`• Структура по видам работ в проекте:`);
-    block.push(listBlock(byType, totalHours));
-  } else if (only.type){
-    block.push(`Фокус: вид работ — ${labelByKey('type', tk)}`);
-    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    block.push(`• Проекты с данным видом работ:`);
-    block.push(listBlock(byProj, totalHours));
-    block.push(`• Исполнители по данному виду работ:`);
-    block.push(listBlock(byPers, totalHours));
-  } else if (combo>=2){
-    // Комбинированные фильтры — показываем срезы, релевантные комбинации
-    if (pk!=='*' && sk!=='*'){
-      block.push(`Фокус: проект ${labelByKey('project', pk)} × исполнитель ${labelByKey('person', sk)}`);
-      const sum = (t.rollup({h:d=>aq.op.sum(d.hours)}).objects()[0]||{h:0}).h||0;
-      block.push(`• Итого часов по сочетанию: ${fmt2(sum)}`);
-      const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-      block.push(`• Виды работ в сочетании:`);
-      block.push(listBlock(byType, sum||1));
-    }
-    if (pk!=='*' && tk!=='*' && sk==='*'){
-      block.push(`Фокус: проект ${labelByKey('project', pk)} × вид ${labelByKey('type', tk)}`);
-      const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-      block.push(`• Исполнители в данном сочетании:`);
-      block.push(listBlock(byPers, totalHours));
-    }
-    if (tk!=='*' && sk!=='*' && pk==='*'){
-      block.push(`Фокус: вид ${labelByKey('type', tk)} × исполнитель ${labelByKey('person', sk)}`);
-      const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-      block.push(`• Проекты в данном сочетании:`);
-      block.push(listBlock(byProj, totalHours));
-    }
+  // Динамика и качество данных
+  if (byDayFull.length>=8){
+    const peak2 = [...byDayFull].sort((a,b)=>b.h-a.h)[0];
+    const min2  = [...byDayFull].filter(p=>p.h>0).sort((a,b)=>a.h-b.h)[0] || null;
+    const sumSeries = byDayFull.reduce((acc,p)=>acc+p.h,0);
+    const avg2 = sumSeries/byDayFull.length;
+    const trend2 = linearTrend(byDayFull);
+    const trendTxt2 = trend2.ok ? (trend2.change>0.05 ? `рост (${(trend2.change*100).toFixed(1)}%)`
+                        : (trend2.change<-0.05 ? `снижение (${(trend2.change*100).toFixed(1)}%)` : `без выраженного тренда`))
+                        : `недостаточно точек для тренда`;
+    lines.push(``); lines.push(`ДИНАМИКА ПО ДНЯМ`);
+    lines.push(`• Точек: ${byDayFull.length} · Среднее: ${avg2.toFixed(2)} ч/день · Пик: ${peak2.date} — ${peak2.h.toFixed(2)} ч`);
+    if (min2) lines.push(`• Минимум (ненулевой): ${min2.date} — ${min2.h.toFixed(2)} ч`);
+    lines.push(`• Тренд: ${trendTxt2}`);
   } else {
-    // Общий отчёт (без узкого фокуса)
-    block.push(`Top-10 проектов (часы и доля):`);
-    block.push(listBlock(projTop, totalHours));
-    block.push(``);
-    block.push(`Top-10 исполнителей (часы и доля):`);
-    block.push(listBlock(peopTop, totalHours));
-    block.push(``);
-    block.push(`Top-10 видов работ (часы и доля):`);
-    block.push(listBlock(typeTop, totalHours));
+    lines.push(``); lines.push(`ДИНАМИКА ПО ДНЯМ`);
+    lines.push(`• Недостаточно точек для тренда (минимум 8).`);
   }
 
-  block.push(``);
-  block.push(`Примечание: все значения рассчитываются по текущим фильтрам и периоду.`);
+  const anomalies = detectAnomalies(byDayFull, 7, 1.5, 1.3);
+  if (anomalies.length){
+    lines.push(``); lines.push(`АНОМАЛИИ / ПЕРЕРАБОТКИ`);
+    lines.push(`• Дни с превышением порога:`);
+    anomalies.slice(0,10).forEach(a=>{
+      lines.push(`  - ${a.date}: ${a.h.toFixed(2)} ч (порог ~ ${(Math.max(a.mu*1.3, a.mu+1.5*a.sd)).toFixed(2)} ч)`);
+    });
+    if (anomalies.length>10) lines.push(`  … и ещё ${anomalies.length-10}`);
+  }
 
-  el.reportText.textContent = block.join("\n");
+  const quiet = detectQuietZones(byDayFull, 3);
+  if (quiet.length){
+    lines.push(``); lines.push(`ТИХИЕ ЗОНЫ / НЕДОЗАГРУЗКА`);
+    quiet.slice(0,10).forEach(z=>{
+      lines.push(`• ${z.from} — ${z.to} (${z.len} дн.)`);
+    });
+    if (quiet.length>10) lines.push(`… и ещё ${quiet.length-10}`);
+  }
+
+  const imbProj = imbalanceInfo(projTop.map(o=>({h:o.h, label:o.projectDisp})), 3, 0.60);
+  if (imbProj.trigger){
+    lines.push(``); lines.push(`ДИСБАЛАНС / КОНЦЕНТРАЦИЯ`);
+    lines.push(`• Доля топ-3 проектов: ${(imbProj.share*100).toFixed(1)}%`);
+    lines.push(`• Топ-3:`);
+    imbProj.top.forEach((r,i)=>lines.push(`  ${i+1}) ${r.label}: ${r.h.toFixed(2)} ч`));
+  }
+
+  // Проверки качества входных данных
+  const dq = (function(){
+    let noDate=0, zeroH=0, negH=0, emptyProj=0, emptyType=0, emptyPerson=0;
+    for (const r of S.filtered){
+      if (!r.date || r.date==="(нет даты)") noDate++;
+      if (!Number.isFinite(r.hours) || r.hours===0) zeroH++;
+      if (Number.isFinite(r.hours) && r.hours<0) negH++;
+      if (!r.projectDisp || r.projectDisp==="(не задано)") emptyProj++;
+      if (!r.typeDisp || r.typeDisp==="(не задано)") emptyType++;
+      if (!r.personDisp || r.personDisp==="(не задано)") emptyPerson++;
+    }
+    return {noDate, zeroH, negH, emptyProj, emptyType, emptyPerson};
+  })();
+  if (dq.noDate || dq.zeroH || dq.negH || dq.emptyProj || dq.emptyType || dq.emptyPerson){
+    lines.push(``); lines.push(`КАЧЕСТВО ДАННЫХ`);
+    if (dq.noDate)     lines.push(`• Без даты: ${dq.noDate} записей`);
+    if (dq.zeroH)      lines.push(`• Нулевые часы: ${dq.zeroH} записей`);
+    if (dq.negH)       lines.push(`• Отрицательные часы: ${dq.negH} записей`);
+    if (dq.emptyProj)  lines.push(`• Пустой проект: ${dq.emptyProj} записей`);
+    if (dq.emptyType)  lines.push(`• Пустой вид работ: ${dq.emptyType} записей`);
+    if (dq.emptyPerson)lines.push(`• Пустой исполнитель: ${dq.emptyPerson} записей`);
+  }
+
+  // Примечание
+  lines.push(``); lines.push(`ПРИМЕЧАНИЯ`);
+  lines.push(`• Все значения рассчитаны по текущим фильтрам и периоду.`);
+  lines.push(`• Пороги: аномалии — >130% скользящего среднего (окно 7 дней) или >1.5σ; тихие зоны — ≥3 подряд дней с 0 ч; дисбаланс — доля топ-3 проектов ≥60%.`);
+
+  el.reportText.textContent = lines.join("\n");
 }
-function listBlock(arr,total){
-  if (!arr.length) return "—";
-  return arr.map((r,i)=>{
-    const label = r.projectDisp ?? r.personDisp ?? r.typeDisp ?? r.date ?? "(не задано)";
-    const h = r.h ?? 0;
-    const share = total>0 ? (h/total*100) : 0;
-    return `${String(i+1).padStart(2,"0")}. ${label}: ${fmt2(h)} ч (${share.toFixed(1)}%)`;
-  }).join("\n");
-}
+
+
 
 /* ====== СВЯЗЬ ====== */
 el.file.addEventListener("change", (e)=>{ const f = e.target.files?.[0]; if (!f){ el.status.textContent = "Файл не выбран"; return; } S.stack.length=0; S.fwd.length=0; updateHistoryButtons(); parseWorkbook(f, -1); });
