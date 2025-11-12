@@ -1,1203 +1,948 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8" />
-<title>Трудозатраты — парсинг и аналитика (адаптивный текстовый отчёт)</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="utf-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Аналитика трудозатрат — парсинг Excel, дашборды, текстовый отчёт</title>
 <style>
   :root{
-    --bg:#ffffff; --fg:#111827; --muted:#6b7280; --line:#e5e7eb;
-    --primary:#0ea5e9; --accent:#10b981; --warn:#ef4444;
-    --card:#fafafa; --hover:#f8fafc; --grid:#f3f4f6; --tooltip:#111827; --tooltipText:#fff;
+    --gap: 12px;
+    --pad: 10px;
+    --border: 1px solid #d9d9d9;
+    --radius: 10px;
+    --bg: #fafafa;
+    --muted:#6b7280;
+    --accent:#1f6feb;
+    --table-h: 540px; /* фиксированная высота окна с исходными данными */
   }
-  *{box-sizing:border-box}
-  body{margin:24px;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial;color:var(--fg);background:var(--bg)}
-  h1{margin:0 0 16px;font-size:20px}
-
-  .layout-top{
-    display:grid;
-    grid-template-columns:420px 1fr;
-    grid-template-rows:auto auto auto auto;
-    gap:16px;
-    align-items:start;
+  html,body{margin:0;padding:0;background:#fff;color:#111;font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;}
+  .container{max-width:1280px;margin:0 auto;padding:16px;}
+  h1{margin:0 0 12px 0;font-size:20px;}
+  .row{display:grid;grid-template-columns: 420px 1fr; gap: var(--gap);}
+  .card{background:#fff;border:var(--border);border-radius:var(--radius);box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card h3{margin:0;padding:10px 12px;border-bottom:var(--border);font-size:14px;background:var(--bg);}
+  .card .body{padding:12px;}
+  .stack > * + *{margin-top:10px;}
+  label{display:block;font-weight:600;margin-bottom:6px;}
+  input[type="file"], select, input[type="date"]{
+    width:100%;padding:8px 10px;border:var(--border);border-radius:8px;background:#fff;
   }
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
-  .left-card{grid-column:1}
-  #card-upload{grid-row:1}
-  #card-sheet{grid-row:2}
-  #card-dates{grid-row:3}
-  #card-filters{grid-row:4}
-
-  .source-wrap{
-    grid-column:2;grid-row:1 / span 4;
-    display:flex;flex-direction:column;min-height:220px;
-  }
-
-  label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
-  input[type="file"],select,input[type="date"]{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#fff}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  .status{font-size:12px;color:var(--muted)}
-  .loading{display:none;align-items:center;gap:8px;color:var(--muted);margin-top:6px}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--primary);animation:blink 1s infinite ease-in-out}
-  .dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.3s}
-  @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
-  .error{display:none;background:#fff0f0;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:10px;margin-top:8px}
-  .btn{padding:8px 12px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer}
-  .btn:active{transform:translateY(1px)}
-
-  .kpis{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:12px;margin-top:12px}
-  .kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
-  .kpi b{display:block;font-size:20px;margin-top:2px}
-
-  .charts-toolbar{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px}
-  .grid{display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:16px;margin-top:12px}
-  .chart{position:relative;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px}
-  .chart .widget-tools{display:flex;gap:6px;justify-content:flex-end}
-  .chart .widget-tools .btn{padding:4px 8px;font-size:12px}
-  .chart h3{margin:8px 0 0;font-size:14px}
-
-  svg{width:100%;height:280px;display:block;background:linear-gradient(180deg,transparent 0,transparent 88%,var(--grid) 88%,var(--grid) 89%,transparent 89%)}
-  .legend{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:6px}
-  .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px;background:#fff}
-
-  .table-scroll{overflow:auto;flex:1;border-radius:10px;border:1px solid var(--line);background:#fff;margin-top:8px}
-  table{border-collapse:collapse;width:100%;background:#fff}
-  th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-  th{background:#f8fafc;font-weight:600}
-  tbody tr:hover{background:var(--hover)}
-  .nowrap{white-space:nowrap}
-  .toolbar{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px}
-  .hint{color:var(--muted);font-size:12px;margin-top:8px}
-
-  .tooltip{position:fixed;pointer-events:none;z-index:9999;background:var(--tooltip);color:var(--tooltipText);
-           padding:6px 8px;border-radius:8px;font-size:12px;line-height:1.2;max-width:360px;border:1px solid #00000022;display:none}
-
-  .report{margin-top:20px}
-  .report .card h3{margin:0 0 8px 0}
-  .report pre{white-space:pre-wrap;font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px}
-
-  @media (max-width:1100px){
-    .layout-top{grid-template-columns:1fr}
-    .source-wrap{grid-row:auto}
-    .kpis{grid-template-columns:repeat(2,1fr)}
-    .grid{grid-template-columns:1fr}
-  }
+  .two{display:grid;grid-template-columns: 1fr 1fr; gap: var(--gap);}
+  .filters .row1{display:grid;grid-template-columns: 1fr 1fr 1fr; gap: var(--gap);}
+  .muted{color:var(--muted);}
+  .btn{display:inline-block;border:var(--border);background:#fff;padding:8px 10px;border-radius:8px;cursor:pointer;user-select:none}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap}
+  .help{font-size:12px;color:var(--muted)}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:var(--border);padding:6px 8px;vertical-align:top}
+  th{background:#f5f7fb;white-space:nowrap;position:sticky;top:0;z-index:1}
+  .table-wrap{height:var(--table-h);overflow:auto;border:var(--border);border-radius:8px}
+  .kpi{display:grid;grid-template-columns: repeat(4,1fr); gap: var(--gap); margin-top:var(--gap)}
+  .kpi .box{border:var(--border);border-radius:8px;padding:10px;background:#fff}
+  .kpi .box .v{font-size:18px;font-weight:700}
+  .dash-grid{display:grid;grid-template-columns: repeat(3, 1fr); gap: var(--gap); margin-top:var(--gap)}
+  .viz{border:var(--border);border-radius:10px;background:#fff}
+  .viz .head{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:var(--border);background:#f9fafb}
+  .viz .head .title{font-weight:600}
+  .viz .body{padding:10px}
+  .svg-wrap{width:100%;height:300px;overflow:auto}
+  .legend{font-size:12px;color:var(--muted)}
+  /* подпись внутри столбика в белом «квадратике», с отступом от оси */
+  .bar-label{paint-order:stroke;stroke:#ffffff;stroke-width:6px}
+  .tooltip{position:fixed;pointer-events:none;visibility:hidden;background:#111;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px;z-index:50}
+  /* отчёт */
+  .report{margin-top:18px}
+  #reportText{white-space:pre-wrap;border:var(--border);border-radius:8px;padding:12px;background:#fff;min-height:160px}
+  .hr{height:1px;background:#eee;margin:12px 0}
+  .sticky-note{font-size:12px;color:var(--muted)}
 </style>
 </head>
 <body>
-<h1>Трудозатраты — парсинг и аналитика</h1>
+<div class="container">
+  <h1>Аналитика трудозатрат (Excel → дашборды → текстовый отчёт)</h1>
 
-<div class="layout-top" id="layoutTop">
-  <div id="card-upload" class="card left-card">
-    <label>Загрузить Excel (.xlsx/.xls)</label>
-    <div class="row">
-      <input id="fileInput" type="file" accept=".xlsx,.xls" style="flex:1" />
-      <button id="btnClear" class="btn" title="Очистить и начать заново">Очистить</button>
+  <div class="row">
+    <!-- ЛЕВАЯ КОЛОНКА -->
+    <div class="stack">
+      <div class="card">
+        <h3>Загрузка файла</h3>
+        <div class="body stack">
+          <input id="file" type="file" accept=".xlsx,.xls" />
+          <div class="two">
+            <button id="btnClear" class="btn">Очистить</button>
+            <div class="help">Поддерживается Excel. Файл читается локально в браузере.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Выбор листа</h3>
+        <div class="body stack">
+          <select id="sheet"></select>
+          <div class="help">Если книга содержит несколько листов — выберите нужный.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Диапазон дат и фильтры</h3>
+        <div class="body stack filters">
+          <div class="two">
+            <div>
+              <label>С даты</label>
+              <input type="date" id="from"/>
+            </div>
+            <div>
+              <label>По дату</label>
+              <input type="date" id="to"/>
+            </div>
+          </div>
+          <div class="row1">
+            <div>
+              <label>Проект</label>
+              <select id="project"></select>
+            </div>
+            <div>
+              <label>Вид работ</label>
+              <select id="type"></select>
+            </div>
+            <div>
+              <label>Исполнитель</label>
+              <select id="person"></select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button id="btnApply" class="btn primary">Применить фильтры</button>
+            <button id="btnReset" class="btn">Сбросить</button>
+          </div>
+          <div class="help">Списки фильтров взаимосвязаны и показывают только релевантные значения.</div>
+        </div>
+      </div>
     </div>
-    <div class="row" style="margin-top:6px">
-      <div id="status" class="status" style="flex:1">Файл не загружен</div>
-    </div>
-    <div class="loading" id="loading">
-      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
-      <span>Обработка…</span>
-    </div>
-    <div class="error" id="errBox">
-      <div><b>Ошибка обработки файла</b></div>
-      <pre id="errText" style="white-space:pre-wrap;margin:6px 0 0 0;max-height:140px;overflow:auto"></pre>
+
+    <!-- ПРАВАЯ КОЛОНКА (исходная таблица фиксированной высоты) -->
+    <div class="card">
+      <h3>Исходные данные (с учётом текущих фильтров)</h3>
+      <div class="body">
+        <div id="srcInfo" class="sticky-note muted"></div>
+        <div class="table-wrap">
+          <table id="srcTable"></table>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div id="card-sheet" class="card left-card">
-    <label>Выбор листа</label>
-    <select id="sheetSel" disabled><option value="-1">Лист: авто</option></select>
+  <!-- KPI -->
+  <div class="kpi" id="kpiRow" style="display:none">
+    <div class="box"><div class="t muted">Всего часов</div><div id="kpiHours" class="v">—</div></div>
+    <div class="box"><div class="t muted">Проектов</div><div id="kpiProj" class="v">—</div></div>
+    <div class="box"><div class="t muted">Исполнителей</div><div id="kpiPeople" class="v">—</div></div>
+    <div class="box"><div class="t muted">Видов работ</div><div id="kpiTypes" class="v">—</div></div>
   </div>
 
-  <div id="card-dates" class="card left-card">
-    <label>Диапазон дат</label>
-    <div class="row">
-      <input id="dateFrom" type="date" disabled />
-      <input id="dateTo" type="date" disabled />
+  <!-- ДАШБОРДЫ -->
+  <div class="dash-grid" id="dashGrid" style="display:none">
+    <div class="viz">
+      <div class="head"><div class="title" id="t1">Часы по проектам (Top-10)</div><div class="legend" id="l1"></div></div>
+      <div class="body"><div class="svg-wrap"><svg id="svgProj" width="1000" height="300"></svg></div></div>
     </div>
-    <div class="status" id="periodInfo" style="margin-top:6px">—</div>
-  </div>
-
-  <div id="card-filters" class="card left-card">
-    <label>Фильтры (каскадные)</label>
-    <div style="display:flex;flex-direction:column;gap:8px">
-      <select id="projectSel" disabled><option value="*">Проект: все</option></select>
-      <select id="typeSel" disabled><option value="*">Вид работ: все</option></select>
-      <select id="personSel" disabled><option value="*">Исполнитель: все</option></select>
+    <div class="viz">
+      <div class="head"><div class="title" id="t2">Часы по исполнителям (Top-10)</div><div class="legend" id="l2"></div></div>
+      <div class="body"><div class="svg-wrap"><svg id="svgPers" width="1000" height="300"></svg></div></div>
     </div>
-    <div class="toolbar">
-      <button id="btnBack" class="btn" disabled>Назад</button>
-      <button id="btnForward" class="btn" disabled>Вперёд</button>
-      <button id="btnReset" class="btn" disabled>Сбросить</button>
+    <div class="viz">
+      <div class="head"><div class="title" id="t3">Часы по видам работ (Top-10)</div><div class="legend" id="l3"></div></div>
+      <div class="body"><div class="svg-wrap"><svg id="svgType" width="1000" height="300"></svg></div></div>
+    </div>
+    <div class="viz" style="grid-column:1 / -1">
+      <div class="head"><div class="title" id="t4">Динамика по дням</div><div class="legend" id="l4"></div></div>
+      <div class="body"><div class="svg-wrap"><svg id="svgDaily" width="1400" height="280"></svg></div></div>
     </div>
   </div>
 
-  <div class="card source-wrap" id="card-source">
-    <div class="row" style="justify-content:space-between;align-items:center">
-      <div class="status"><b>Исходные данные</b> — текущая выборка</div>
-      <div class="status" id="srcCount">—</div>
-    </div>
-    <div class="table-scroll" id="srcScroll" style="min-height:220px;">
-      <table id="srcTable">
-        <thead>
-          <tr>
-            <th class="nowrap">Дата</th>
-            <th>Проект</th>
-            <th>Вид работ</th>
-            <th>Исполнитель</th>
-            <th class="nowrap">Часы</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-    <div class="toolbar">
-      <button id="btnExportRaw" class="btn" disabled>Экспорт текущей выборки (CSV)</button>
-    </div>
-    <div class="hint">Окно автоматически отражает выбранные фильтры и клики по графикам.</div>
-  </div>
-</div>
-
-<div id="kpis" class="kpis" style="display:none">
-  <div class="kpi"><span>Всего часов</span><b id="kpiHours">—</b></div>
-  <div class="kpi"><span>Проектов</span><b id="kpiProjects">—</b></div>
-  <div class="kpi"><span>Исполнителей</span><b id="kpiPeople">—</b></div>
-  <div class="kpi"><span>Дней с записями</span><b id="kpiDays">—</b></div>
-</div>
-
-<div id="chartsToolbar" class="charts-toolbar" style="display:none">
-  <span class="status" id="ctxLabel"></span>
-</div>
-
-<div id="charts" class="grid" style="display:none">
-  <div class="chart">
-    <div class="widget-tools">
-      <button class="btn" id="btnProjBack">Назад</button>
-      <button class="btn" id="btnProjFwd">Вперёд</button>
-      <button class="btn" id="btnProjPNG">PNG</button>
-    </div>
-    <h3 id="h3Proj">Часы по проектам (Top 10)</h3>
-    <svg id="svgProj" viewBox="0 0 900 280" preserveAspectRatio="none"></svg>
-    <div class="legend"><span class="pill">Клик по столбцу → фильтр по проекту</span></div>
-  </div>
-
-  <div class="chart">
-    <div class="widget-tools">
-      <button class="btn" id="btnPeopleBack">Назад</button>
-      <button class="btn" id="btnPeopleFwd">Вперёд</button>
-      <button class="btn" id="btnPeoplePNG">PNG</button>
-    </div>
-    <h3 id="h3People">Часы по исполнителям (Top 10)</h3>
-    <svg id="svgPeople" viewBox="0 0 900 280" preserveAspectRatio="none"></svg>
-    <div class="legend"><span class="pill">Клик по столбцу → фильтр по исполнителю</span></div>
-  </div>
-
-  <div class="chart">
-    <div class="widget-tools">
-      <button class="btn" id="btnTypesBack">Назад</button>
-      <button class="btn" id="btnTypesFwd">Вперёд</button>
-      <button class="btn" id="btnTypesPNG">PNG</button>
-    </div>
-    <h3 id="h3Types">Часы по видам работ (Top 10)</h3>
-    <svg id="svgTypes" viewBox="0 0 900 280" preserveAspectRatio="none"></svg>
-    <div class="legend"><span class="pill">Клик по столбцу → фильтр по виду</span></div>
-  </div>
-
-  <div class="chart">
-    <div class="widget-tools">
-      <button class="btn" id="btnDatesBack">Назад</button>
-      <button class="btn" id="btnDatesFwd">Вперёд</button>
-      <button class="btn" id="btnDatesPNG">PNG</button>
-    </div>
-    <h3 id="h3Dates">Динамика по дням</h3>
-    <svg id="svgDates" viewBox="0 0 900 280" preserveAspectRatio="none"></svg>
-    <div class="legend"><span class="pill">Клик по точке → зафиксировать дату</span></div>
-  </div>
-</div>
-
-<!-- ТЕКСТОВЫЙ ОТЧЁТ (адаптивный) -->
-<div id="report" class="report" style="display:none">
-  <div class="card">
+  <!-- ТЕКСТОВЫЙ ОТЧЁТ -->
+  <div class="report">
     <h3>Текстовый отчёт по текущей выборке</h3>
-    <div class="toolbar" style="margin-top:0">
-      <button class="btn" id="btnCopyReport">Копировать</button>
-      <button class="btn" id="btnExportReport">Экспорт .txt</button>
+    <div class="btn-row" style="margin-bottom:8px">
+      <button id="btnCopy" class="btn">Копировать</button>
+      <button id="btnTxt" class="btn">Экспорт .txt</button>
     </div>
-    <pre id="reportText" style="margin-top:8px;"></pre>
+    <div id="reportText"></div>
   </div>
 </div>
 
 <div id="tooltip" class="tooltip"></div>
 
+<!-- ЛОКАЛЬНЫЕ БИБЛИОТЕКИ -->
 <script src="xlsx.full.min.js"></script>
 <script src="arquero.min.js"></script>
 <script src="dayjs.min.js"></script>
 
 <script>
-/* ====== СОСТОЯНИЕ ====== */
-const S = {
-  raw: [],
-  filtered: [],
-  uniques: { projects:[], types:[], people:[], dates:[] },
-  limits: { min:null, max:null },
-  filename: "",
-  sheets: [],
-  stack: [],
-  fwd: []
-};
-const aq = window.aq;
-
-/* ====== DOM ====== */
+/* ========= ГЛОБАЛЬНОЕ СОСТОЯНИЕ ========= */
 const el = {
-  layoutTop: document.getElementById("layoutTop"),
-  cardUpload: document.getElementById("card-upload"),
-  cardSheet: document.getElementById("card-sheet"),
-  cardDates: document.getElementById("card-dates"),
-  cardFilters: document.getElementById("card-filters"),
-  cardSource: document.getElementById("card-source"),
-
-  file: document.getElementById("fileInput"),
-  btnClear: document.getElementById("btnClear"),
-  sheetSel: document.getElementById("sheetSel"),
-  status: document.getElementById("status"),
-  loading: document.getElementById("loading"),
-  errBox: document.getElementById("errBox"),
-  errText: document.getElementById("errText"),
-  periodInfo: document.getElementById("periodInfo"),
-  dateFrom: document.getElementById("dateFrom"),
-  dateTo: document.getElementById("dateTo"),
-  project: document.getElementById("projectSel"),
-  type: document.getElementById("typeSel"),
-  person: document.getElementById("personSel"),
-  btnBack: document.getElementById("btnBack"),
-  btnForward: document.getElementById("btnForward"),
-  btnReset: document.getElementById("btnReset"),
-  btnExportRaw: document.getElementById("btnExportRaw"),
-  kpis: document.getElementById("kpis"),
-  charts: document.getElementById("charts"),
-  chartsToolbar: document.getElementById("chartsToolbar"),
-  ctxLabel: document.getElementById("ctxLabel"),
-  tbodySrc: document.querySelector("#srcTable tbody"),
-  srcCount: document.getElementById("srcCount"),
-  svgProj: document.getElementById("svgProj"),
-  svgPeople: document.getElementById("svgPeople"),
-  svgTypes: document.getElementById("svgTypes"),
-  svgDates: document.getElementById("svgDates"),
-  tooltip: document.getElementById("tooltip"),
-
-  btnProjBack: document.getElementById("btnProjBack"),
-  btnPeopleBack: document.getElementById("btnPeopleBack"),
-  btnTypesBack: document.getElementById("btnTypesBack"),
-  btnDatesBack: document.getElementById("btnDatesBack"),
-  btnProjFwd: document.getElementById("btnProjFwd"),
-  btnPeopleFwd: document.getElementById("btnPeopleFwd"),
-  btnTypesFwd: document.getElementById("btnTypesFwd"),
-  btnDatesFwd: document.getElementById("btnDatesFwd"),
-  btnProjPNG: document.getElementById("btnProjPNG"),
-  btnPeoplePNG: document.getElementById("btnPeoplePNG"),
-  btnTypesPNG: document.getElementById("btnTypesPNG"),
-  btnDatesPNG: document.getElementById("btnDatesPNG"),
-
-  h3Proj: document.getElementById("h3Proj"),
-  h3People: document.getElementById("h3People"),
-  h3Types: document.getElementById("h3Types"),
-  h3Dates: document.getElementById("h3Dates"),
-
-  report: document.getElementById("report"),
-  reportText: document.getElementById("reportText"),
-  btnCopyReport: document.getElementById("btnCopyReport"),
-  btnExportReport: document.getElementById("btnExportReport"),
+  file:    document.getElementById('file'),
+  clear:   document.getElementById('btnClear'),
+  sheet:   document.getElementById('sheet'),
+  from:    document.getElementById('from'),
+  to:      document.getElementById('to'),
+  project: document.getElementById('project'),
+  type:    document.getElementById('type'),
+  person:  document.getElementById('person'),
+  apply:   document.getElementById('btnApply'),
+  reset:   document.getElementById('btnReset'),
+  srcInfo: document.getElementById('srcInfo'),
+  srcTable:document.getElementById('srcTable'),
+  kpiRow:  document.getElementById('kpiRow'),
+  kpiHours:document.getElementById('kpiHours'),
+  kpiProj: document.getElementById('kpiProj'),
+  kpiPeople:document.getElementById('kpiPeople'),
+  kpiTypes:document.getElementById('kpiTypes'),
+  dash:    document.getElementById('dashGrid'),
+  svgProj: document.getElementById('svgProj'),
+  svgPers: document.getElementById('svgPers'),
+  svgType: document.getElementById('svgType'),
+  svgDaily:document.getElementById('svgDaily'),
+  t1: document.getElementById('t1'), l1: document.getElementById('l1'),
+  t2: document.getElementById('t2'), l2: document.getElementById('l2'),
+  t3: document.getElementById('t3'), l3: document.getElementById('l3'),
+  t4: document.getElementById('t4'), l4: document.getElementById('l4'),
+  reportText: document.getElementById('reportText'),
+  copy: document.getElementById('btnCopy'),
+  txt:  document.getElementById('btnTxt'),
+  tip:  document.getElementById('tooltip')
+};
+const S = {
+  raw: [],        // все строки листа (после нормализации)
+  filtered: [],   // отфильтрованные строки по UI
+  wb: null,
+  sheets: []
 };
 
-/* ====== УТИЛИТЫ ====== */
-const fmt2 = n => (Number.isFinite(n) ? n.toFixed(2) : "0.00");
-const $esc = s => String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-function showLoading(on){ el.loading.style.display = on ? "flex" : "none"; }
-function setControlsEnabled(on){ [el.dateFrom, el.dateTo, el.project, el.type, el.person, el.btnBack, el.btnForward, el.btnReset, el.btnExportRaw, el.sheetSel].forEach(x => x.disabled = !on); }
-function showError(err, extras){
-  el.errBox.style.display = "block";
-  const lines = [];
-  if (err && err.message) lines.push(err.message);
-  if (err && err.stack) lines.push(err.stack.split("\n").slice(0,3).join("\n"));
-  if (extras) lines.push(String(extras));
-  el.errText.textContent = lines.join("\n\n");
+/* ========= УТИЛИТЫ ========= */
+function normHeader(s){
+  if (!s) return "";
+  const x = String(s).trim().toLowerCase();
+  return x.replace(/\s+/g,' ');
 }
-function clearError(){ el.errBox.style.display = "none"; el.errText.textContent = ""; }
-function hhmmToDec(s) { if (typeof s !== "string" || !s.includes(":")) return NaN; const [hh, mm] = s.split(":").map(x => parseInt(x||"0",10)); return (hh||0)+(mm||0)/60; }
-function downloadText(filename, text) { const blob=new Blob([text],{type:"text/plain;charset=utf-8;"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click(); URL.revokeObjectURL(a.href); a.remove(); }
-function escapeHtml(s){ return String(s||"").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-function shortLabel(str, max=42){ const s = String(str||""); return s.length>max ? s.slice(0,max-1)+"…" : s; }
-
-/* Tooltip */
-function showTip(html, x, y){
-  el.tooltip.innerHTML = html;
-  el.tooltip.style.display = "block";
-  const pad = 10;
-  const rect = el.tooltip.getBoundingClientRect();
-  let left = x + pad, top = y + pad;
-  if (left + rect.width > window.innerWidth - 8) left = x - rect.width - pad;
-  if (top + rect.height > window.innerHeight - 8) top = y - rect.height - pad;
-  el.tooltip.style.left = left + "px";
-  el.tooltip.style.top = top + "px";
+function pickColName(obj, candidates){
+  const keys = Object.keys(obj||{});
+  const map = {};
+  keys.forEach(k=> map[normHeader(k)] = k);
+  for (const c of candidates){
+    if (map[c]) return map[c];
+  }
+  return null;
 }
-function hideTip(){ el.tooltip.style.display = "none"; }
-
-/* Синхронизируем фикс-высоту правого блока */
-function syncRightHeight(){
-  const gap = 16;
-  const h = el.cardUpload.getBoundingClientRect().height
-          + el.cardSheet.getBoundingClientRect().height
-          + el.cardDates.getBoundingClientRect().height
-          + el.cardFilters.getBoundingClientRect().height
-          + gap*3;
-  document.getElementById("card-source").style.height = Math.round(h) + "px";
+function parseDateMaybe(v){
+  if (!v && v!==0) return null;
+  // Excel даты
+  if (typeof v === 'number') {
+    try{
+      const d = XLSX.SSF.parse_date_code(v);
+      if (!d) return null;
+      const iso = dayjs(new Date(Date.UTC(d.y, d.m-1, d.d))).format('YYYY-MM-DD');
+      return iso;
+    }catch(_){/* noop */}
+  }
+  // строки
+  const s = String(v).trim();
+  if (!s) return null;
+  const tryFormats = ['YYYY-MM-DD','DD.MM.YYYY','D.M.YYYY','YYYY/MM/DD','DD/MM/YYYY','DD-MM-YYYY','YYYY.MM.DD'];
+  for (const f of tryFormats){
+    const d = dayjs(s, f, true);
+    if (d.isValid()) return d.format('YYYY-MM-DD');
+  }
+  const d2 = dayjs(s);
+  return d2.isValid() ? d2.format('YYYY-MM-DD') : null;
 }
-
-/* ====== НОРМАЛИЗАЦИЯ ====== */
-function normalizeKey(s){
-  if (s == null) return "(не задано)";
-  let t = String(s);
-  t = t.replace(/\u00A0/g, ' ').replace(/([А-ЯA-Z])\.\s*([А-ЯA-Z])\./g, '$1.$2.').replace(/[\u0000-\u001F\u007F]/g, '');
-  t = t.replace(/\s+/g, ' ').trim();
-  if (t.normalize) t = t.normalize('NFC');
-  return t.toLowerCase();
+function toNumber(v){
+  if (typeof v === 'number') return v;
+  const s = String(v||'').replace(',', '.').replace(/\s/g,'').trim();
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
 }
-function displayOf(s){
-  if (s == null) return "(не задано)";
-  let t = String(s).replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
-  if (t.normalize) t = t.normalize('NFC');
-  return t || "(не задано)";
+function uniq(arr){ return Array.from(new Set(arr)); }
+function contextLabel(){
+  const a=[];
+  if (el.project.value && el.project.value!=='*') a.push('Проект: ' + labelByKey('project', el.project.value));
+  if (el.type.value && el.type.value!=='*') a.push('Вид работ: ' + labelByKey('type', el.type.value));
+  if (el.person.value && el.person.value!=='*') a.push('Исполнитель: ' + labelByKey('person', el.person.value));
+  if (el.from.value || el.to.value) a.push(`Период: ${el.from.value||'—'} — ${el.to.value||'—'}`);
+  return a.join(' · ');
 }
-
-/* ====== ДАТЫ ====== */
-function toISO(value){
-  try{
-    if (!value && value!==0) return null;
-    if (typeof value === "number") return dayjs(XLSX.SSF.format("yyyy-mm-dd", value)).format("YYYY-MM-DD");
-    let s = String(value).trim(); if (!s) return null;
-    s = s.replace(/,/g,".");
-    let m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$/);
-    if (m){ const dd=m[1].padStart(2,"0"), mm=m[2].padStart(2,"0"), yy=m[3].length===2?("20"+m[3]):m[3]; const iso=`${yy}-${mm}-${dd}`; return dayjs(iso).isValid()?iso:null; }
-    if (dayjs(s).isValid()) return dayjs(s).format("YYYY-MM-DD");
-    s = s.replace(/\./g,"-"); return dayjs(s).isValid()?dayjs(s).format("YYYY-MM-DD"):null;
-  }catch(e){ return null; }
+function labelByKey(kind, key){
+  if (key==='*') return 'все';
+  const list = {
+    project: S.filtered.concat(S.raw).map(r=>r.projectDisp && r.projectKey? {k:r.projectKey, v:r.projectDisp}: null),
+    type:    S.filtered.concat(S.raw).map(r=>r.typeDisp    && r.typeKey   ? {k:r.typeKey,    v:r.typeDisp}: null),
+    person:  S.filtered.concat(S.raw).map(r=>r.personDisp  && r.personKey  ? {k:r.personKey,  v:r.personDisp}: null)
+  }[kind].filter(Boolean);
+  const m = new Map(list.map(o=>[o.k,o.v]));
+  return m.get(key) || '(не задано)';
 }
 
-/* ====== ПАРСИНГ EXCEL ====== */
-async function parseWorkbook(file, sheetIndex=-1){
-  clearError();
-  try{
-    S.filename = file.name || "";
-    el.status.textContent = `Загружается: ${S.filename} (${(file.size/1024).toFixed(1)} КБ)`;
-    showLoading(true); setControlsEnabled(false);
-
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type:"array", cellDates:true, dateNF:"YYYY-MM-DD" });
-
-    S.sheets = wb.SheetNames || [];
-    if (!S.sheets.length) throw new Error("В книге отсутствуют листы.");
-
-    el.sheetSel.innerHTML = S.sheets.map((n,i)=>`<option value="${i}">${i+1}. ${$esc(n)}</option>`).join("");
-
-    let chosenIdx;
-    if (sheetIndex>=0 && sheetIndex < S.sheets.length) {
-      chosenIdx = sheetIndex;
+/* ====== ВСПОМОГАТЕЛЬНЫЕ ДЛЯ ОТЧЁТА (добавлено/обновлено) ====== */
+function fmtPct(v){ return Number.isFinite(v) ? (v*100).toFixed(1) + "%" : "0.0%"; }
+function safeSum(arr, f){ let s=0; for (const x of arr) s += f? (f(x)||0):(x||0); return s; }
+function listBlock(arr,total){
+  if (!arr || !arr.length) return "—";
+  const sum = total>0 ? total : safeSum(arr, r=>r.h||r.value||0) || 1;
+  return arr.map((r,i)=>{
+    const label = r.projectDisp ?? r.personDisp ?? r.typeDisp ?? r.label ?? r.date ?? "(не задано)";
+    const h = (r.h ?? r.value ?? 0);
+    const share = h/sum;
+    return `${String(i+1).padStart(2,"0")}. ${label}: ${h.toFixed(2)} ч (${(share*100).toFixed(1)}%)`;
+  }).join("\n");
+}
+function buildDailySeries(table){
+  const t = aq.from(table).filter(aq.escape(d=>d.date && d.date!=="(нет даты)"));
+  const objs = t.groupby("date").rollup({h:d=>aq.op.sum(d.hours)}).orderby("date").objects();
+  if (!objs.length) return [];
+  const minD = dayjs(objs[0].date);
+  const maxD = dayjs(objs[objs.length-1].date);
+  const map = new Map(objs.map(o=>[o.date, o.h]));
+  const res = [];
+  for (let d=minD; d.isBefore(maxD)||d.isSame(maxD,"day"); d=d.add(1,"day")){
+    const iso = d.format("YYYY-MM-DD");
+    res.push({date: iso, h: Number(map.get(iso)||0)});
+  }
+  return res;
+}
+function movingAvg(arr, w){
+  const out = Array(arr.length).fill(0);
+  let sum = 0;
+  for (let i=0;i<arr.length;i++){
+    sum += arr[i];
+    if (i>=w) sum -= arr[i-w];
+    out[i] = i>=w-1 ? sum/w : NaN;
+  }
+  return out;
+}
+function stddev(arr){
+  const v = arr.filter(Number.isFinite);
+  if (!v.length) return 0;
+  const m = v.reduce((a,b)=>a+b,0)/v.length;
+  const s2 = v.reduce((a,b)=>a+(b-m)*(b-m),0)/v.length;
+  return Math.sqrt(s2);
+}
+function detectAnomalies(series, w=7, k=1.5, kPct=1.3){
+  if (series.length < w+2) return [];
+  const vals = series.map(p=>p.h);
+  const res = [];
+  for (let i=w;i<vals.length;i++){
+    const window = vals.slice(i-w, i);
+    const mu = window.reduce((a,b)=>a+b,0)/w;
+    const sd = stddev(window);
+    const thr1 = mu + k*sd;
+    const thr2 = mu * kPct;
+    if (vals[i] > Math.max(thr1, thr2) && vals[i]>0){
+      res.push({date: series[i].date, h: vals[i], mu, sd});
+    }
+  }
+  return res;
+}
+function detectQuietZones(series, minLen=3){
+  if (!series.length) return [];
+  const zones = [];
+  let runStart = null, runLen = 0;
+  for (let i=0;i<series.length;i++){
+    if ((series[i].h||0)===0){
+      if (runStart==null) runStart = i;
+      runLen++;
     } else {
-      chosenIdx = chooseBestSheet(wb).idx;
+      if (runLen>=minLen) zones.push({from: series[runStart].date, to: series[i-1].date, len: runLen});
+      runStart = null; runLen = 0;
     }
-    el.sheetSel.value = String(chosenIdx);
-    el.sheetSel.disabled = false;
+  }
+  if (runLen>=minLen) zones.push({from: series[runStart].date, to: series[series.length-1].date, len: runLen});
+  return zones;
+}
+function imbalanceInfo(groups, topN=3, threshold=0.60){
+  const sorted = [...groups].sort((a,b)=>(b.h??b.value??0)-(a.h??a.value??0));
+  const total = safeSum(sorted, r=>r.h??r.value??0);
+  const top = sorted.slice(0, topN);
+  const topSum = safeSum(top, r=>r.h??r.value??0);
+  const share = total>0 ? topSum/total : 0;
+  return {trigger: share>=threshold, share, total, top};
+}
+function linearTrend(series){
+  const n = series.length;
+  if (n<8) return {ok:false};
+  const xs = Array.from({length:n}, (_,i)=>i+1);
+  const ys = series.map(p=>p.h);
+  const meanX = xs.reduce((a,b)=>a+b,0)/n;
+  const meanY = ys.reduce((a,b)=>a+b,0)/n;
+  let num=0, den=0;
+  for (let i=0;i<n;i++){ num += (xs[i]-meanX)*(ys[i]-meanY); den += (xs[i]-meanX)*(xs[i]-meanX); }
+  const slope = den===0 ? 0 : num/den;
+  const firstAvg = ys.slice(0, Math.max(3, Math.floor(n/4))).reduce((a,b)=>a+b,0)/Math.max(1, Math.max(3, Math.floor(n/4)));
+  const lastAvg  = ys.slice(n-Math.max(3, Math.floor(n/4))).reduce((a,b)=>a+b,0)/Math.max(1, Math.max(3, Math.floor(n/4)));
+  const change = firstAvg>0 ? (lastAvg-firstAvg)/firstAvg : (lastAvg>0?1:0);
+  return {ok:true, slope, change};
+}
 
-    const sheetName = S.sheets[chosenIdx];
-    const sheet = wb.Sheets[sheetName];
+/* ========= ПАРСИНГ EXCEL ========= */
+el.file.addEventListener('change', async (e)=>{
+  if (!e.target.files || !e.target.files[0]) return;
+  const buf = await e.target.files[0].arrayBuffer();
+  S.wb = XLSX.read(buf, {type:'array', cellDates:false, cellNF:false, cellText:false});
+  S.sheets = S.wb.SheetNames.slice();
+  // заполнить селект листов
+  el.sheet.innerHTML = '';
+  for (const s of S.sheets){
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    el.sheet.appendChild(opt);
+  }
+  // авто-выбор: если есть «Работы», выберем его, иначе первый
+  const idx = Math.max(0, S.sheets.findIndex(n=>/^работ/i.test(n)));
+  el.sheet.selectedIndex = idx;
+  loadSelectedSheet();
+});
 
-    let headerRow = findHeaderRow(getSheetRows(wb, sheetName, 250));
+el.sheet.addEventListener('change', loadSelectedSheet);
 
-    const rows = XLSX.utils.sheet_to_json(sheet, {
-      defval:null, blankrows:false, raw:true, range: headerRow
+function loadSelectedSheet(){
+  if (!S.wb) return;
+  const name = el.sheet.value || S.wb.SheetNames[0];
+  const ws = S.wb.Sheets[name];
+  const json = XLSX.utils.sheet_to_json(ws, {defval:null, raw:true});
+  if (!json.length){
+    S.raw = []; S.filtered = [];
+    renderAll();
+    return;
+  }
+  // распознаём колонки по содержимому заголовков (гибко)
+  const sample = json[0];
+  const dateCol   = pickColName(sample, ['дата','date','день','число']);
+  const hoursCol  = pickColName(sample, ['часы','нормо-часы','нормочасы','часов','hours','duration']);
+  const projCol   = pickColName(sample, ['проект','проект/портфель','project','portfolio']);
+  const typeCol   = pickColName(sample, ['вид работ','работа','тип работ','work type','type']);
+  const persCol   = pickColName(sample, ['исполнитель','сотрудник','фио','worker','employee','person','ответственный']);
+
+  S.raw = json.map((row, i)=>{
+    const d  = parseDateMaybe(dateCol ? row[dateCol] : null);
+    const h  = toNumber(hoursCol ? row[hoursCol] : 0);
+    const pr = String(projCol && row[projCol] != null ? row[projCol] : '').trim();
+    const tp = String(typeCol && row[typeCol] != null ? row[typeCol] : '').trim();
+    const pe = String(persCol && row[persCol] != null ? row[persCol] : '').trim();
+    return {
+      _row:i+2,
+      date: d || '(нет даты)',
+      hours: h,
+      project: pr || '',
+      type: tp || '',
+      person: pe || '',
+      projectKey: pr.toLowerCase() || '(не задано)',
+      typeKey: tp.toLowerCase()    || '(не задано)',
+      personKey: pe.toLowerCase()  || '(не задано)',
+      projectDisp: pr || '(не задано)',
+      typeDisp: tp || '(не задано)',
+      personDisp: pe || '(не задано)'
+    };
+  });
+
+  // авто-диапазон дат
+  const dates = S.raw.map(r=>r.date).filter(x=>x && x!=='(нет даты)');
+  if (dates.length){
+    const min = dates.slice().sort()[0];
+    const max = dates.slice().sort().reverse()[0];
+    el.from.value = min;
+    el.to.value   = max;
+  } else {
+    el.from.value = ''; el.to.value = '';
+  }
+
+  // инициализация фильтров
+  fillFilters();
+  applyFilters();
+}
+
+/* ========= ФИЛЬТРЫ ========= */
+function fillFilters(){
+  const all = S.raw;
+  const set = (sel, arr, withAll=true)=>{
+    const old = sel.value;
+    sel.innerHTML = '';
+    if (withAll){
+      const opt = document.createElement('option'); opt.value='*'; opt.textContent='— Все —'; sel.appendChild(opt);
+    }
+    arr.forEach(v=>{
+      const opt = document.createElement('option'); opt.value=v.key; opt.textContent=v.disp; sel.appendChild(opt);
     });
-    if (!rows.length) throw new Error(`Лист «${sheetName}» пуст (0 строк данных).`);
+    // восстанавливаем выбор если можно
+    if ([...sel.options].some(o=>o.value===old)) sel.value = old;
+  };
+  // без ограничений
+  const projects = uniq(all.map(r=>r.projectKey)).filter(Boolean).sort().map(k=>{
+    const disp = (all.find(r=>r.projectKey===k)||{}).projectDisp || '(не задано)'; return {key:k, disp};
+  });
+  const types = uniq(all.map(r=>r.typeKey)).filter(Boolean).sort().map(k=>{
+    const disp = (all.find(r=>r.typeKey===k)||{}).typeDisp || '(не задано)'; return {key:k, disp};
+  });
+  const people = uniq(all.map(r=>r.personKey)).filter(Boolean).sort().map(k=>{
+    const disp = (all.find(r=>r.personKey===k)||{}).personDisp || '(не задано)'; return {key:k, disp};
+  });
+  set(el.project, projects);
+  set(el.type, types);
+  set(el.person, people);
+}
 
-    const keys = Object.keys(rows[0] || {}).map(k => String(k));
-    const findKey = (alts) => keys.find(k => alts.some(a => k.toLowerCase().includes(a)));
-    const dateKey   = findKey(["дата","date","день"]);
-    const projectKey= findKey(["проект","project","портфель"]);
-    const typeKey   = findKey(["вид","работ","type","category"]);
-    const personKey = findKey(["сотр","исполн","фио","name","employee","user"]);
-    const hoursKey  = findKey(["час","hours","time","duration","труд","затрат"]);
-
-    S.raw = rows.map(r => {
-      let d = toISO(r && dateKey ? r[dateKey] : null);
-      if (!d) d = "(нет даты)";
-      let h = (r && hoursKey ? r[hoursKey] : null);
-      if (typeof h === "string" && h.includes(":")) h = hhmmToDec(h);
-      h = parseFloat(h);
-
-      const projDisp   = displayOf(r && projectKey ? r[projectKey] : null);
-      const typeDisp   = displayOf(r && typeKey    ? r[typeKey]    : null);
-      const personDisp = displayOf(r && personKey  ? r[personKey]  : null);
-
-      return {
-        date: d,
-        projectDisp: projDisp, projectKey: normalizeKey(projDisp),
-        typeDisp:    typeDisp, typeKey:    normalizeKey(typeDisp),
-        personDisp:  personDisp, personKey: normalizeKey(personDisp),
-        hours: Number.isFinite(h) ? h : 0
-      };
+function depopulateFilters(base){
+  // пересчёт значений по выбранным зависимостям
+  const projKey = el.project.value, typeKey = el.type.value, personKey = el.person.value;
+  const pass = (r)=>{
+    if (projKey!=='*'   && r.projectKey!==projKey) return false;
+    if (typeKey!=='*'   && r.typeKey!==typeKey) return false;
+    if (personKey!=='*' && r.personKey!==personKey) return false;
+    return true;
+  };
+  const pool = base.filter(pass);
+  const set = (sel, arr)=>{
+    const cur = sel.value;
+    sel.innerHTML = '';
+    const opt = document.createElement('option'); opt.value='*'; opt.textContent='— Все —'; sel.appendChild(opt);
+    arr.forEach(v=>{
+      const opt2 = document.createElement('option'); opt2.value=v.key; opt2.textContent=v.disp; sel.appendChild(opt2);
     });
-
-    buildUniques();
-
-    const dates = S.uniques.dates;
-    S.limits.min = dates[0] || "";
-    S.limits.max = dates[dates.length-1] || "";
-
-    initFiltersUI();
-    applyFiltersAndRender(false);
-
-    el.status.textContent = `Готово: записей ${S.raw.length}. Период: ${S.limits.min || "—"} — ${S.limits.max || "—"}`;
-  }catch(err){
-    console.error(err);
-    showError(err, `Файл: ${S.filename || "(нет)"} | Листы: ${S.sheets.join(", ") || "(нет)"} | Библиотеки: XLSX=${!!window.XLSX}, aq=${!!window.aq}, dayjs=${!!window.dayjs}`);
-    el.status.textContent = `Ошибка обработки файла`;
-    el.kpis.style.display = "none"; el.charts.style.display = "none"; el.chartsToolbar.style.display = "none"; el.report.style.display="none";
-  }finally{
-    showLoading(false);
-    syncRightHeight();
-  }
-}
-
-function getSheetRows(wb, name, maxRows=250) {
-  const ws = wb.Sheets[name];
-  if (!ws) return [];
-  const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:null, blankrows:false, raw:true });
-  return Array.isArray(rows) ? rows.slice(0, maxRows) : [];
-}
-function findHeaderRow(rows) {
-  const want = ["дата","project","проект","вид","работ","исполн","фио","час","hours","труд","затрат"];
-  let bestIdx = 0, bestScore = -1;
-  for (let i=0;i<Math.min(rows.length, 40);i++){
-    const cells = (rows[i]||[]).map(v=>String(v||"").toLowerCase());
-    const score = want.reduce((s,w)=> s + (cells.some(c=>c.includes(w))?1:0), 0);
-    if (score>bestScore){bestScore=score;bestIdx=i;}
-  }
-  return bestIdx;
-}
-function chooseBestSheet(wb){
-  const names = wb.SheetNames||[];
-  let best={idx:0,score:-1};
-  names.forEach((n,i)=>{
-    const rows = getSheetRows(wb,n,250);
-    if (!rows.length) return;
-    const headerRow = findHeaderRow(rows);
-    const header = (rows[headerRow]||[]).map(v=>String(v||"").toLowerCase());
-    const groups = [
-      ["дата","date","день"],
-      ["проект","project","портфель"],
-      ["вид","работ","type","category"],
-      ["сотр","исполн","фио","name","employee","user"],
-      ["час","hours","time","duration","труд","затрат"]
-    ];
-    let hits=0; groups.forEach(g=>{ if (header.some(h=>g.some(x=>h.includes(x)))) hits++; });
-    const dataRows = rows.slice(headerRow+1).filter(r=>Array.isArray(r) && r.some(c=>c!=null && String(c).trim()!=="")).length;
-    const score = hits*10 + Math.min(10, Math.floor(dataRows/10)) + (/работ/i.test(n)?1:0);
-    if (score>best.score) best={idx:i,score};
-  });
-  return best;
-}
-
-/* ====== УНИКАЛЬНЫЕ ====== */
-function buildUniques(){
-  const projMap = new Map(), typeMap = new Map(), peopleMap = new Map(), dateSet = new Set();
-  for (const r of S.raw){
-    if (r.projectKey && !projMap.has(r.projectKey)) projMap.set(r.projectKey, r.projectDisp);
-    if (r.typeKey    && !typeMap.has(r.typeKey))     typeMap.set(r.typeKey,   r.typeDisp);
-    if (r.personKey  && !peopleMap.has(r.personKey)) peopleMap.set(r.personKey,r.personDisp);
-    if (r.date && r.date !== "(нет даты)") dateSet.add(r.date);
-  }
-  S.uniques.projects = [...projMap.entries()].sort((a,b)=>a[1].localeCompare(b[1]));
-  S.uniques.types    = [...typeMap.entries()].sort((a,b)=>a[1].localeCompare(b[1]));
-  S.uniques.people   = [...peopleMap.entries()].sort((a,b)=>a[1].localeCompare(b[1]));
-  S.uniques.dates    = Array.from(dateSet).sort();
-}
-
-/* ====== UI ====== */
-function initFiltersUI() {
-  fillSelect(el.project, S.uniques.projects, "Проект: все");
-  fillSelect(el.type,    S.uniques.types,    "Вид работ: все");
-  fillSelect(el.person,  S.uniques.people,   "Исполнитель: все");
-
-  el.dateFrom.min = el.dateTo.min = S.limits.min || "";
-  el.dateFrom.max = el.dateTo.max = S.limits.max || "";
-  el.dateFrom.value = S.limits.min || "";
-  el.dateTo.value   = S.limits.max || "";
-  el.periodInfo.textContent = (S.limits.min && S.limits.max) ? `Доступный период: ${S.limits.min} — ${S.limits.max}` : "Даты не распознаны";
-
-  [el.project, el.type, el.person, el.dateFrom, el.dateTo].forEach(x => x.onchange = () => {
-    clampDates();
-    pushState();
-    applyFiltersAndRender(false);
-  });
-
-  el.btnReset.onclick = () => { setFilters('*','*','*', S.limits.min||"", S.limits.max||""); S.stack.length=0; S.fwd.length=0; updateHistoryButtons(); applyFiltersAndRender(false); };
-  el.btnBack.onclick = () => { goBack(); };
-  el.btnForward.onclick = () => { goForward(); };
-
-  el.sheetSel.onchange = () => {
-    const f = el.file.files && el.file.files[0];
-    if (f){
-      const idx = parseInt(el.sheetSel.value,10);
-      S.stack.length=0; S.fwd.length=0; updateHistoryButtons();
-      parseWorkbook(f, isNaN(idx)?-1:idx);
-    }
+    if ([...sel.options].some(o=>o.value===cur)) sel.value = cur;
   };
-
-  document.getElementById("btnProjBack").onclick =
-  document.getElementById("btnPeopleBack").onclick =
-  document.getElementById("btnTypesBack").onclick =
-  document.getElementById("btnDatesBack").onclick = () => { goBack(); };
-
-  document.getElementById("btnProjFwd").onclick  =
-  document.getElementById("btnPeopleFwd").onclick  =
-  document.getElementById("btnTypesFwd").onclick  =
-  document.getElementById("btnDatesFwd").onclick  = () => { goForward(); };
-
-  document.getElementById("btnProjPNG").onclick   = () => exportChartWithTitle(el.svgProj,  el.h3Proj.textContent,  fileBase()+"_projects.png");
-  document.getElementById("btnPeoplePNG").onclick = () => exportChartWithTitle(el.svgPeople,el.h3People.textContent,fileBase()+"_people.png");
-  document.getElementById("btnTypesPNG").onclick  = () => exportChartWithTitle(el.svgTypes, el.h3Types.textContent, fileBase()+"_types.png");
-  document.getElementById("btnDatesPNG").onclick  = () => exportChartWithTitle(el.svgDates, el.h3Dates.textContent, fileBase()+"_bydate.png");
-
-  el.btnClear.onclick = clearAll;
-
-  el.btnCopyReport.onclick = () => {
-    const t = el.reportText.textContent || "";
-    navigator.clipboard?.writeText(t);
-  };
-  el.btnExportReport.onclick = () => {
-    const t = el.reportText.textContent || "";
-    downloadText(`${fileBase()}_report.txt`, t);
-  };
-
-  setControlsEnabled(true);
-  updateHistoryButtons();
-  syncRightHeight();
-}
-function clampDates(){
-  if (el.dateFrom.value && S.limits.min && el.dateFrom.value < S.limits.min) el.dateFrom.value = S.limits.min;
-  if (el.dateFrom.value && S.limits.max && el.dateFrom.value > S.limits.max) el.dateFrom.value = S.limits.max;
-  if (el.dateTo.value   && S.limits.max && el.dateTo.value   > S.limits.max) el.dateTo.value   = S.limits.max;
-  if (el.dateTo.value   && S.limits.min && el.dateTo.value   < S.limits.min) el.dateTo.value   = S.limits.min;
-}
-function fillSelect(sel, pairs, allLabel){
-  sel.innerHTML = `<option value="*">${allLabel}</option>` + pairs.map(([key,disp])=>`<option value="${key}">${$esc(disp)}</option>`).join("");
-}
-function setFilters(projectKey, typeKey, personKey, dFrom, dTo){
-  el.project.value = projectKey; el.type.value = typeKey; el.person.value = personKey;
-  el.dateFrom.value = dFrom; el.dateTo.value = dTo;
-}
-
-/* ====== КАСКАДНЫЕ СПИСКИ ====== */
-function rebuildCascadeOptions(){
-  const d1 = el.dateFrom.value, d2 = el.dateTo.value;
-  const pk = el.project.value, tk = el.type.value, sk = el.person.value;
-
-  const base = S.raw.filter(r=>{
-    const okDate = (!d1 || r.date==="(нет даты)" || r.date >= d1) && (!d2 || r.date==="(нет даты)" || r.date <= d2);
-    return okDate;
+  const projects = uniq(pool.map(r=>r.projectKey)).filter(Boolean).sort().map(k=>{
+    const disp = (pool.find(r=>r.projectKey===k)||{}).projectDisp || '(не задано)'; return {key:k, disp};
   });
-
-  const projMap = new Map(), typeMap = new Map(), peopleMap = new Map();
-
-  base.forEach(r=>{
-    if ((tk==='*' || r.typeKey===tk) && (sk==='*' || r.personKey===sk)) {
-      if (!projMap.has(r.projectKey)) projMap.set(r.projectKey, r.projectDisp);
-    }
-    if ((pk==='*' || r.projectKey===pk) && (sk==='*' || r.personKey===sk)) {
-      if (!typeMap.has(r.typeKey)) typeMap.set(r.typeKey, r.typeDisp);
-    }
-    if ((pk==='*' || r.projectKey===pk) && (tk==='*' || r.typeKey===tk)) {
-      if (!peopleMap.has(r.personKey)) peopleMap.set(r.personKey, r.personDisp);
-    }
+  const types = uniq(pool.map(r=>r.typeKey)).filter(Boolean).sort().map(k=>{
+    const disp = (pool.find(r=>r.typeKey===k)||{}).typeDisp || '(не задано)'; return {key:k, disp};
   });
-
-  const projPairs   = [...projMap.entries()].sort((a,b)=>a[1].localeCompare(b[1]));
-  const typePairs   = [...typeMap.entries()].sort((a,b)=>a[1].localeCompare(b[1]));
-  const peoplePairs = [...peopleMap.entries()].sort((a,b)=>a[1].localeCompare(b[1]));
-
-  const prevP = el.project.value, prevT = el.type.value, prevS = el.person.value;
-  fillSelect(el.project, projPairs, "Проект: все");
-  fillSelect(el.type,    typePairs, "Вид работ: все");
-  fillSelect(el.person,  peoplePairs, "Исполнитель: все");
-  if ([...projMap.keys()].includes(prevP)) el.project.value = prevP; else el.project.value='*';
-  if ([...typeMap.keys()].includes(prevT)) el.type.value    = prevT; else el.type.value='*';
-  if ([...peopleMap.keys()].includes(prevS)) el.person.value= prevS; else el.person.value='*';
+  const people = uniq(pool.map(r=>r.personKey)).filter(Boolean).sort().map(k=>{
+    const disp = (pool.find(r=>r.personKey===k)||{}).personDisp || '(не задано)'; return {key:k, disp};
+  });
+  set(el.project, projects);
+  set(el.type, types);
+  set(el.person, people);
 }
 
-/* ====== ФИЛЬТРАЦИЯ/ОТРИСОВКА ====== */
-function applyFiltersAndRender(initial=false) {
-  rebuildCascadeOptions();
-
-  const pk = el.project.value, tk = el.type.value, sk = el.person.value, d1 = el.dateFrom.value, d2 = el.dateTo.value;
-
-  let t = aq.from(S.raw);
-  if (pk !== "*") t = t.filter(aq.escape(d => d.projectKey === pk));
-  if (tk !== "*") t = t.filter(aq.escape(d => d.typeKey    === tk));
-  if (sk !== "*") t = t.filter(aq.escape(d => d.personKey  === sk));
-  if (d1) t = t.filter(aq.escape(d => d.date !== "(нет даты)" && d.date >= d1));
-  if (d2) t = t.filter(aq.escape(d => d.date !== "(нет даты)" && d.date <= d2));
-
-  S.filtered = t.objects();
-  renderAll(initial);
-  syncRightHeight();
+function applyFilters(){
+  if (!S.raw.length){
+    S.filtered = [];
+    renderAll();
+    return;
+  }
+  const f = el.from.value, t = el.to.value;
+  const projKey = el.project.value, typeKey = el.type.value, personKey = el.person.value;
+  S.filtered = S.raw.filter(r=>{
+    if (f && r.date && r.date!=='(нет даты)' && r.date < f) return false;
+    if (t && r.date && r.date!=='(нет даты)' && r.date > t) return false;
+    if (projKey!=='*'   && r.projectKey!==projKey) return false;
+    if (typeKey!=='*'   && r.typeKey!==typeKey) return false;
+    if (personKey!=='*' && r.personKey!==personKey) return false;
+    return true;
+  });
+  // взаимозависимые списки — на основе всех данных, но с учётом уже выбранных
+  depopulateFilters(S.raw);
+  renderAll();
 }
 
-function renderAll(initial=false) {
+/* ========= ОТРИСОВКА ========= */
+function renderAll(){
   renderSourceTable();
-
-  const has = S.filtered.length>0;
-  el.kpis.style.display = has ? "" : "none";
-  el.charts.style.display = has ? "" : "none";
-  el.chartsToolbar.style.display = has ? "" : "none";
-  el.report.style.display = has ? "" : "none";
-  el.btnExportRaw.disabled = !has;
-
-  if (!has){ el.ctxLabel.textContent = ""; el.reportText.textContent=""; return; }
-
-  el.ctxLabel.textContent = contextLabel();
-  setChartTitles();
   renderKPI();
   renderCharts();
-  renderReport(); // только общий адаптивный отчёт (под виджетами текста нет)
+  renderReport();
 }
 
-/* ====== Заголовки виджетов ====== */
-function setChartTitles(){
-  const ctx = contextLabel();
-  const suffix = ctx ? ` — ${ctx}` : "";
-  el.h3Proj.textContent   = `Часы по проектам (Top 10)${suffix}`;
-  el.h3People.textContent = `Часы по исполнителям (Top 10)${suffix}`;
-  el.h3Types.textContent  = `Часы по видам работ (Top 10)${suffix}`;
-  el.h3Dates.textContent  = `Динамика по дням${suffix}`;
-}
-
-/* ====== Таблица исходной выборки ====== */
 function renderSourceTable(){
-  el.tbodySrc.innerHTML = "";
   const rows = S.filtered;
-  el.srcCount.textContent = rows.length ? `Строк: ${rows.length}` : "Пусто";
-  const frag = document.createDocumentFragment();
-  const cap = Math.min(rows.length, 2000);
-  for (let i=0;i<cap;i++){
-    const r = rows[i];
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="nowrap">${$esc(r.date)}</td>
-      <td>${$esc(r.projectDisp)}</td>
-      <td>${$esc(r.typeDisp)}</td>
-      <td>${$esc(r.personDisp)}</td>
-      <td class="nowrap">${fmt2(r.hours)}</td>`;
-    frag.appendChild(tr);
-  }
-  el.tbodySrc.appendChild(frag);
+  el.srcInfo.textContent = rows.length ? `Строк: ${rows.length}` : 'Нет данных для отображения.';
+  const cols = ['date','projectDisp','typeDisp','personDisp','hours'];
+  const names= ['Дата','Проект','Вид работ','Исполнитель','Часы'];
+  const thead = `<thead><tr>${names.map(n=>`<th>${n}</th>`).join('')}</tr></thead>`;
+  const tbody = `<tbody>${
+    rows.slice(0,5000).map(r=>{
+      const vals = [r.date, r.projectDisp||'(не задано)', r.typeDisp||'(не задано)', r.personDisp||'(не задано)', (r.hours||0).toFixed(2)];
+      return `<tr>${vals.map(v=>`<td>${String(v)}</td>`).join('')}</tr>`;
+    }).join('')
+  }</tbody>`;
+  el.srcTable.innerHTML = thead + tbody;
 }
 
-/* ====== KPI ====== */
-function renderKPI() {
-  const hours = (aq.from(S.filtered).rollup({h: d => aq.op.sum(d.hours)}).objects()[0] || {h:0}).h || 0;
-  const projectCount = new Set(S.filtered.map(r=>r.projectKey)).size;
-  const peopleCount  = new Set(S.filtered.map(r=>r.personKey)).size;
-  const dayCount     = new Set(S.filtered.map(r=>r.date)).size;
-  document.getElementById("kpiHours").textContent   = fmt2(hours);
-  document.getElementById("kpiProjects").textContent= projectCount;
-  document.getElementById("kpiPeople").textContent  = peopleCount;
-  document.getElementById("kpiDays").textContent    = dayCount;
-}
-
-/* ====== ЧАРТЫ ====== */
-function renderCharts() {
+function renderKPI(){
   const t = aq.from(S.filtered);
-
-  const proj  = t.groupby("projectKey","projectDisp").rollup({h: d => aq.op.sum(d.hours)}).orderby(aq.desc("h"))
-                  .objects().map(r=>({key:r.projectKey,label:r.projectDisp,value:r.h}));
-  const people= t.groupby("personKey","personDisp").rollup({h: d => aq.op.sum(d.hours)}).orderby(aq.desc("h"))
-                  .objects().map(r=>({key:r.personKey,label:r.personDisp,value:r.h}));
-  const types = t.groupby("typeKey","typeDisp").rollup({h: d => aq.op.sum(d.hours)}).orderby(aq.desc("h"))
-                  .objects().map(r=>({key:r.typeKey,label:r.typeDisp,value:r.h}));
-  const byDate= t.filter(aq.escape(d=>d.date!=="(нет даты)")).groupby("date").rollup({h:d=>aq.op.sum(d.hours)}).orderby("date")
-                  .objects().map(r=>({label:r.date,value:r.h}));
-
-  drawBar(el.svgProj,  topN(proj,10),   "project");
-  drawBar(el.svgPeople,topN(people,10), "person");
-  drawBar(el.svgTypes, topN(types,10),  "type");
-  drawLine(el.svgDates,byDate);
+  const total = (t.rollup({h:d=>aq.op.sum(d.hours)}).objects()[0]||{h:0}).h||0;
+  const projs = uniq(S.filtered.map(r=>r.projectKey)).filter(Boolean);
+  const people= uniq(S.filtered.map(r=>r.personKey)).filter(Boolean);
+  const types = uniq(S.filtered.map(r=>r.typeKey)).filter(Boolean);
+  el.kpiHours.textContent = total.toFixed(2);
+  el.kpiProj.textContent  = projs.length;
+  el.kpiPeople.textContent= people.length;
+  el.kpiTypes.textContent = types.length;
+  el.kpiRow.style.display = S.filtered.length ? '' : 'none';
 }
-function topN(arr,n){ return arr.slice(0,n); }
 
-/* ====== SVG ====== */
-function drawBar(svg, data, target) {
-  svg.innerHTML=""; svg.onclick=null;
-  const W = svg.viewBox.baseVal.width || 900, H = svg.viewBox.baseVal.height || 280;
-  const padL=260, padR=24, padT=16, padB=30;
+function maxOf(arr, acc){ let m=0; for (const x of arr){ const v=acc?acc(x):x; if (v>m) m=v; } return m; }
+function drawBars(svg, data, opt){
+  // opt: {cat,label, val, w, h, padX, padY, color}
+  const NS="http://www.w3.org/2000/svg";
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const w = opt.w||1000, h=opt.h||300, padX=opt.padX||80, padY=opt.padY||28;
+  svg.setAttribute('width', w); svg.setAttribute('height', h);
+  const innerW = w - padX - 20, innerH = h - padY - 20;
+  const max = Math.max(1, maxOf(data, d=>d[opt.val]));
+  const bw = Math.max(16, Math.floor(innerW / data.length) - 6);
+  // оси
+  const axis = document.createElementNS(NS,'line');
+  axis.setAttribute('x1', padX); axis.setAttribute('y1', h-20);
+  axis.setAttribute('x2', w-10); axis.setAttribute('y2', h-20);
+  axis.setAttribute('stroke', '#cbd5e1'); axis.setAttribute('stroke-width','1');
+  svg.appendChild(axis);
 
-  const maxV = Math.max(1, ...data.map(d=>d.value));
-  const innerW = W - padL - padR, innerH = H - padT - padB, step = innerH / (data.length || 1);
-
-  append(svg, lineEl(padL, padT, padL, H-padB, "#cbd5e1",1));
-  append(svg, lineEl(padL, H-padB, W-padR, H-padB, "#cbd5e1",1));
-
-  for (let i=0;i<=5;i++){
-    const x = padL + innerW * (i/5);
-    append(svg, lineEl(x, padT, x, H-padB, "#f1f5f9",1));
-    append(svg, textEl(x, H-padB+16, fmt2(maxV*i/5), 10, "middle", "#475569"));
-  }
-
-  data.forEach((d, i) => {
-    const y = padT + i*step + step*0.18, h = step*0.64;
-    const w = innerW * (d.value / maxV);
-
-    const rect = rectEl(padL, y, w, h, "#0ea5e9");
-    rect.setAttribute("data-target", target);
-    rect.setAttribute("data-key", d.key || "");
-    rect.setAttribute("data-label", d.label || "");
-    rect.setAttribute("data-value", fmt2(d.value));
-    rect.style.cursor = "pointer";
+  // bars
+  data.forEach((d,i)=>{
+    const x = padX + i*(bw+6);
+    const barH = Math.round((d[opt.val]/max) * (innerH-10));
+    const y = (h-20) - barH;
+    // прямоугольник
+    const rect = document.createElementNS(NS,'rect');
+    rect.setAttribute('x', x);
+    rect.setAttribute('y', y);
+    rect.setAttribute('width', bw);
+    rect.setAttribute('height', barH);
+    rect.setAttribute('fill', opt.color || '#1f6feb');
+    rect.setAttribute('rx','3');
+    rect.setAttribute('data-tip', (d.tip || `${d[opt.label]} — ${d[opt.val].toFixed(2)} ч`).replace(/"/g,'&quot;'));
+    rect.addEventListener('mousemove', onTipMove);
+    rect.addEventListener('mouseenter', onTipShow);
+    rect.addEventListener('mouseleave', onTipHide);
     svg.appendChild(rect);
 
-    append(svg, textEl(padL-8, y+h*0.6, shortLabel(d.label, 42), 11, "end", "#111"));
-
-    placeValueBadge(svg, padL, w, y, h, fmt2(d.value), {axisGap:12});
-
-    rect.addEventListener("mousemove", e => {
-      showTip(`<b>${escapeHtml(d.label||"(без названия)")}</b><br>Часы: <b>${fmt2(d.value)}</b>`, e.clientX, e.clientY);
+    // подпись внизу (категория), переносы вручную
+    const wrap = wrapLabel(d[opt.cat] || d[opt.label], 14);
+    wrap.forEach((ln, k)=>{
+      const text = document.createElementNS(NS, 'text');
+      text.setAttribute('x', x + bw/2);
+      text.setAttribute('y', h - 6 + (k*12));
+      text.setAttribute('text-anchor','middle');
+      text.setAttribute('font-size','10');
+      text.setAttribute('fill','#374151');
+      text.textContent = ln;
+      svg.appendChild(text);
     });
-    rect.addEventListener("mouseleave", hideTip);
-  });
 
-  svg.onclick = (ev)=>{
-    const key = ev.target.getAttribute && ev.target.getAttribute("data-key");
-    const where = ev.target.getAttribute && ev.target.getAttribute("data-target");
-    if (!key || !where) return;
-    pushState();
-    if (where==="project"){ el.project.value = key; }
-    if (where==="person"){  el.person.value  = key; }
-    if (where==="type"){    el.type.value    = key; }
-    applyFiltersAndRender(false);
-  };
-}
-
-function drawLine(svg, data) {
-  svg.innerHTML=""; svg.onclick=null;
-  const W = svg.viewBox.baseVal.width || 900, H = svg.viewBox.baseVal.height || 280;
-  const padL=70, padR=16, padT=16, padB=30;
-
-  const maxV = Math.max(1, ...data.map(d=>d.value));
-  const innerW = W - padL - padR, innerH = H - padT - padB;
-  const n = Math.max(1, data.length);
-  const xAt = i => padL + innerW * (i/(n-1 || 1));
-  const yAt = v => padT + innerH * (1 - v/maxV);
-
-  append(svg, lineEl(padL, padT, padL, H-padB, "#cbd5e1",1));
-  append(svg, lineEl(padL, H-padB, W-padR, H-padB, "#cbd5e1",1));
-  for (let i=1;i<=4;i++){
-    const y = padT + innerH*(i/4);
-    append(svg, lineEl(padL, y, W-padR, y, "#f1f5f9",1));
-    append(svg, textEl(padL-6, y+4, fmt2(maxV*(1-i/4)), 10, "end", "#475569"));
-  }
-
-  let dAttr = "";
-  data.forEach((p,i)=>{ const x = xAt(i), y = yAt(p.value); dAttr += (i? " L":"M")+x+" "+y; });
-  append(svg, pathEl(dAttr, "none", "#10b981", 2));
-
-  data.forEach((p,i)=>{
-    const x = xAt(i), y = yAt(p.value);
-    const c = circleEl(x,y,3.2,"#10b981");
-    c.setAttribute("data-date", p.label);
-    c.style.cursor = "pointer";
-    svg.appendChild(c);
-
-    if (i%Math.ceil(n/8)===0 || i===n-1){
-      append(svg, textEl(x, H-padB+14, (p.label||"").slice(5), 9, "middle", "#475569"));
+    // значение — внутри вершины, белый «квадратик», с отступом от оси
+    if (barH > 10){
+      const val = d[opt.val];
+      const lbl = document.createElementNS(NS,'text');
+      lbl.setAttribute('x', x + bw/2);
+      // минимальный отступ от оси X (низ) — 4px
+      const labelY = Math.min(y + 14, (h-24)); // чтобы не заезжало на ось
+      lbl.setAttribute('y', labelY);
+      lbl.setAttribute('text-anchor','middle');
+      lbl.setAttribute('font-size','11');
+      lbl.setAttribute('fill','#111');
+      lbl.setAttribute('class','bar-label');
+      lbl.textContent = val.toFixed(2);
+      svg.appendChild(lbl);
+    } else {
+      // очень маленькие — немного наложим
+      const val = d[opt.val];
+      const lbl = document.createElementNS(NS,'text');
+      lbl.setAttribute('x', x + bw/2);
+      const labelY = (h-32); // чуть выше оси
+      lbl.setAttribute('y', labelY);
+      lbl.setAttribute('text-anchor','middle');
+      lbl.setAttribute('font-size','11');
+      lbl.setAttribute('fill','#111');
+      lbl.setAttribute('class','bar-label');
+      lbl.textContent = val.toFixed(2);
+      svg.appendChild(lbl);
     }
-
-    c.addEventListener("mousemove", e=>{
-      showTip(`<b>${escapeHtml(p.label)}</b><br>Часы: <b>${fmt2(p.value)}</b>`, e.clientX, e.clientY);
-    });
-    c.addEventListener("mouseleave", hideTip);
   });
-
-  svg.onclick = (ev)=>{
-    const d = ev.target.getAttribute && ev.target.getAttribute("data-date");
-    if (!d) return;
-    pushState();
-    el.dateFrom.value = d;
-    el.dateTo.value = d;
-    applyFiltersAndRender(false);
-  };
 }
-
-/* ====== БЕЙДЖ ЗНАЧЕНИЯ ДЛЯ БАРОВ (с отступом от оси) ====== */
-function placeValueBadge(svg, padL, w, y, h, text, opts={}){
-  const axisGap = Number.isFinite(opts.axisGap) ? opts.axisGap : 8;
-  const desiredRight = padL + Math.max(0, w) - 4;
-  const yCenter = y + h*0.5;
-
-  const g = document.createElementNS("http://www.w3.org/2000/svg","g");
-  g.setAttribute("style", "pointer-events:none");
-  const t = document.createElementNS("http://www.w3.org/2000/svg","text");
-  t.setAttribute("font-size","11");
-  t.setAttribute("fill","#111");
-  t.textContent = text;
-  svg.appendChild(g); g.appendChild(t);
-
-  t.setAttribute("x", desiredRight);
-  t.setAttribute("y", yCenter);
-  const bb = t.getBBox();
-  const pad = 4, r = 4;
-  const rectW = Math.max(24, bb.width + pad*2);
-  const rectH = Math.max(16, bb.height + pad*1.2);
-
-  let rectX = desiredRight - rectW;
-  let rectY = yCenter - rectH/2;
-
-  const minLeft = padL + axisGap;
-  if (rectX < minLeft){ rectX = minLeft; }
-
-  const rEl = document.createElementNS("http://www.w3.org/2000/svg","rect");
-  rEl.setAttribute("x", rectX);
-  rEl.setAttribute("y", rectY);
-  rEl.setAttribute("width", rectW);
-  rEl.setAttribute("height", rectH);
-  rEl.setAttribute("rx", r);
-  rEl.setAttribute("fill", "#fff");
-  rEl.setAttribute("stroke", "#e5e7eb");
-  rEl.setAttribute("stroke-width", "1");
-  rEl.setAttribute("opacity","0.98");
-
-  t.setAttribute("x", rectX + rectW - pad - 1);
-  t.setAttribute("y", rectY + rectH/2 + (bb.height*0.35));
-  t.setAttribute("text-anchor","end");
-
-  g.insertBefore(rEl, t);
-}
-
-/* SVG helpers */
-function append(svg, el){ svg.appendChild(el); }
-function lineEl(x1,y1,x2,y2,stroke,w){ const el=document.createElementNS("http://www.w3.org/2000/svg","line"); el.setAttribute("x1",x1);el.setAttribute("y1",y1);el.setAttribute("x2",x2);el.setAttribute("y2",y2);el.setAttribute("stroke",stroke);el.setAttribute("stroke-width",w); return el; }
-function rectEl(x,y,w,h,fill){ const el=document.createElementNS("http://www.w3.org/2000/svg","rect"); el.setAttribute("x",x);el.setAttribute("y",y);el.setAttribute("width",w);el.setAttribute("height",h);el.setAttribute("fill",fill); el.setAttribute("rx","4"); return el; }
-function textEl(x,y,txt,size,anchor,color){ const el=document.createElementNS("http://www.w3.org/2000/svg","text"); el.setAttribute("x",x);el.setAttribute("y",y);el.setAttribute("font-size",size);el.setAttribute("text-anchor",anchor||"start");el.setAttribute("fill",color||"#111"); el.textContent=txt; return el; }
-function pathEl(d,fill,stroke,w){ const el=document.createElementNS("http://www.w3.org/2000/svg","path"); el.setAttribute("d",d); el.setAttribute("fill",fill); el.setAttribute("stroke",stroke); el.setAttribute("stroke-width",w); return el; }
-function circleEl(cx,cy,r,fill){ const el=document.createElementNS("http://www.w3.org/2000/svg","circle"); el.setAttribute("cx",cx);el.setAttribute("cy",cy);el.setAttribute("r",r);el.setAttribute("fill",fill); return el; }
-
-/* ====== ЭКСПОРТ SVG + заголовок ====== */
-function exportChartWithTitle(svgEl, title, filename){
-  try{
-    const serializer = new XMLSerializer();
-    const src = serializer.serializeToString(svgEl);
-    const svgBlob = new Blob([src], {type: "image/svg+xml;charset=utf-8"});
-    const url = URL.createObjectURL(svgBlob);
-
-    const img = new Image();
-    img.onload = function(){
-      const vb = svgEl.viewBox.baseVal;
-      const svgW = vb && vb.width ? vb.width : svgEl.clientWidth || 900;
-      const svgH = vb && vb.height ? vb.height : svgEl.clientHeight || 280;
-
-      const padTop = 48;
-      const canvas = document.createElement("canvas");
-      canvas.width = svgW;
-      canvas.height = svgH + padTop;
-
-      const ctx = canvas.getContext("2d");
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0,0,canvas.width,canvas.height);
-
-      ctx.fillStyle = "#111827";
-      ctx.font = "16px Segoe UI, Roboto, Arial";
-      const lines = wrapText(title||"", canvas.width - 32, ctx);
-      let y = 24;
-      lines.forEach(line=>{
-        ctx.fillText(line, 16, y);
-        y += 20;
-      });
-
-      ctx.drawImage(img, 0, padTop);
-
-      const a = document.createElement("a");
-      a.href = canvas.toDataURL("image/png");
-      a.download = filename || "chart.png";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    };
-    img.onerror = ()=> URL.revokeObjectURL(url);
-    img.src = url;
-  }catch(e){ console.error(e); }
-}
-function wrapText(text, maxWidth, ctx){
-  if (!text) return [""];
-  const words = text.split(/\s+/);
+function wrapLabel(s, width){
+  s = String(s||'(не задано)');
+  const words = s.split(/\s+/);
   const lines = [];
-  let cur = "";
-  words.forEach(w=>{
-    const test = cur ? (cur+" "+w) : w;
-    if (ctx.measureText(test).width <= maxWidth) cur = test;
-    else { if (cur) lines.push(cur); cur = w; }
-  });
+  let cur='';
+  for (const w of words){
+    if ((cur + ' ' + w).trim().length > width){
+      if (cur) lines.push(cur);
+      cur = w;
+    } else {
+      cur = (cur?cur+' ':'') + w;
+    }
+  }
   if (cur) lines.push(cur);
-  return lines;
+  return lines.slice(0,3); // ограничим до 3 строк
+}
+function onTipShow(e){ el.tip.style.visibility='visible'; el.tip.textContent = e.target.getAttribute('data-tip')||''; }
+function onTipHide(){ el.tip.style.visibility='hidden'; }
+function onTipMove(e){
+  const pad=8;
+  el.tip.style.left = (e.clientX + pad) + 'px';
+  el.tip.style.top  = (e.clientY + pad) + 'px';
 }
 
-/* ====== ИСТОРИЯ (Назад/Вперёд) ====== */
-function currentState(){ return { p:el.project.value, t:el.type.value, s:el.person.value, d1:el.dateFrom.value, d2:el.dateTo.value }; }
-function applyState(st){ setFilters(st.p, st.t, st.s, st.d1, st.d2); applyFiltersAndRender(false); }
-function pushState(){
-  const cur = currentState();
-  const top = S.stack[S.stack.length-1];
-  if (!top || JSON.stringify(top) !== JSON.stringify(cur)) {
-    S.stack.push(cur);
-    S.fwd.length = 0;
-    updateHistoryButtons();
-  }
-}
-function goBack(){
-  if (!S.stack.length) return;
-  const cur = currentState();
-  let prev = S.stack.pop();
-  if (prev && JSON.stringify(prev) === JSON.stringify(cur)) prev = S.stack.pop();
-  if (prev){
-    S.fwd.push(cur);
-    updateHistoryButtons();
-    applyState(prev);
-  } else {
-    updateHistoryButtons();
-  }
-}
-function goForward(){
-  if (!S.fwd.length) return;
-  const cur = currentState();
-  const next = S.fwd.pop();
-  if (next){
-    S.stack.push(cur);
-    updateHistoryButtons();
-    applyState(next);
-  }
-}
-function updateHistoryButtons(){
-  el.btnBack.disabled = S.stack.length===0;
-  const hasFwd = S.fwd.length>0;
-  el.btnForward.disabled = !hasFwd;
+function renderCharts(){
+  const data = S.filtered;
+  if (!data.length){ el.dash.style.display='none'; return; }
+  el.dash.style.display = '';
 
-  document.getElementById("btnProjBack").disabled =
-  document.getElementById("btnPeopleBack").disabled =
-  document.getElementById("btnTypesBack").disabled =
-  document.getElementById("btnDatesBack").disabled = (S.stack.length===0);
+  const t = aq.from(data);
 
-  document.getElementById("btnProjFwd").disabled =
-  document.getElementById("btnPeopleFwd").disabled =
-  document.getElementById("btnTypesFwd").disabled =
-  document.getElementById("btnDatesFwd").disabled = !hasFwd;
+  const proj = t.groupby('projectDisp').rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc('h')).objects().slice(0,10);
+  drawBars(el.svgProj, proj.map(o=>({label:o.projectDisp, cat:o.projectDisp, value:o.h, tip:`${o.projectDisp}: ${o.h.toFixed(2)} ч`})), {label:'label', cat:'cat', val:'value', color:'#2563eb'});
+
+  const pers = t.groupby('personDisp').rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc('h')).objects().slice(0,10);
+  drawBars(el.svgPers, pers.map(o=>({label:o.personDisp, cat:o.personDisp, value:o.h, tip:`${o.personDisp}: ${o.h.toFixed(2)} ч`})), {label:'label', cat:'cat', val:'value', color:'#059669'});
+
+  const type = t.groupby('typeDisp').rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc('h')).objects().slice(0,10);
+  drawBars(el.svgType, type.map(o=>({label:o.typeDisp, cat:o.typeDisp, value:o.h, tip:`${o.typeDisp}: ${o.h.toFixed(2)} ч`})), {label:'label', cat:'cat', val:'value', color:'#7c3aed'});
+
+  // daily
+  const series = buildDailySeries(data);
+  const daily = series.map(p=>({label:p.date, cat:p.date, value:p.h, tip:`${p.date}: ${p.h.toFixed(2)} ч`}));
+  drawBars(el.svgDaily, daily, {label:'label', cat:'cat', val:'value', color:'#ef4444', w:1400, h:280, padX:80});
+  // заголовки с контекстом
+  const ctx = contextLabel();
+  el.l1.textContent = ctx;
+  el.l2.textContent = ctx;
+  el.l3.textContent = ctx;
+  el.l4.textContent = ctx;
 }
 
-/* ====== СБРОС ====== */
-function clearAll(){
-  S.raw = [];
-  S.filtered = [];
-  S.uniques = {projects:[],types:[],people:[],dates:[]};
-  S.limits = {min:null,max:null};
-  S.filename = "";
-  S.sheets = [];
-  S.stack.length = 0;
-  S.fwd.length = 0;
-
-  el.file.value = "";
-  el.sheetSel.innerHTML = `<option value="-1">Лист: авто</option>`;
-  el.sheetSel.disabled = true;
-
-  el.dateFrom.value = "";
-  el.dateTo.value = "";
-  ["projectSel","typeSel","personSel"].forEach(id => document.getElementById(id).innerHTML = `<option value="*">—</option>`);
-
-  el.tbodySrc.innerHTML = "";
-  el.srcCount.textContent = "—";
-  el.kpis.style.display = "none";
-  el.charts.style.display = "none";
-  el.chartsToolbar.style.display = "none";
-  el.report.style.display = "none";
-  el.btnExportRaw.disabled = true;
-  el.status.textContent = "Файл очищен";
-  clearError();
-  updateHistoryButtons();
-  syncRightHeight();
-}
-
-/* ====== ЭКСПОРТ ВЫБОРКИ ====== */
-function exportCSVRaw(){
-  const rows = S.filtered || [];
-  if (!rows.length) return;
-
-  const header = [
-    `Период: ${el.dateFrom.value||S.limits.min||"-"} — ${el.dateTo.value||S.limits.max||"-"}`,
-    `Фильтры: проект=${labelByKey('project', el.project.value)}, вид=${labelByKey('type', el.type.value)}, исполнитель=${labelByKey('person', el.person.value)}`
-  ].join("\n") + "\n";
-
-  const cols = ["Дата","Проект","Вид работ","Исполнитель","Часы"];
-  const csv = header + [cols.join(";")]
-    .concat(rows.map(r=>[r.date,r.projectDisp,r.typeDisp,r.personDisp,fmt2(r.hours)].map(v=>String(v).replace(/;/g, ",")).join(";")))
-    .join("\n");
-  const base = fileBase();
-  downloadText(`${base}_vyborka.txt`, csv);
-}
-
-/* ====== КОНТЕКСТ ====== */
-function labelByKey(kind, key){
-  if (key==='*') return '*';
-  const arr = (kind==='project') ? S.uniques.projects : (kind==='type' ? S.uniques.types : S.uniques.people);
-  const found = arr.find(([k])=>k===key);
-  return found ? found[1] : '(не найдено)';
-}
-function contextLabel(){
-  const parts = [];
-  const p = labelByKey('project', el.project.value);
-  const t = labelByKey('type', el.type.value);
-  const s = labelByKey('person', el.person.value);
-  if (p!=='*') parts.push(`Проект: ${p}`);
-  if (t!=='*') parts.push(`Вид: ${t}`);
-  if (s!=='*') parts.push(`Исполнитель: ${s}`);
-  if (el.dateFrom.value || el.dateTo.value) parts.push(`Период: ${el.dateFrom.value||'—'} — ${el.dateTo.value||'—'}`);
-  return parts.join(' · ');
-}
-function fileBase(){ return S.filename ? S.filename.replace(/\.[^.]+$/,"") : "export"; }
-
-/* ====== АДАПТИВНЫЙ ТЕКСТОВЫЙ ОТЧЁТ ====== */
+/* ====== ПОЛНЫЙ АДАПТИВНЫЙ ОТЧЁТ (замена renderReport) ====== */
 function renderReport(){
   const t = aq.from(S.filtered);
   const totalHours = (t.rollup({h:d=>aq.op.sum(d.hours)}).objects()[0]||{h:0}).h||0;
   const recs = S.filtered.length;
-  const uniq = {
-    projects: [...new Set(S.filtered.map(r=>r.projectDisp))].filter(Boolean),
-    people:   [...new Set(S.filtered.map(r=>r.personDisp))].filter(Boolean),
-    types:    [...new Set(S.filtered.map(r=>r.typeDisp))].filter(Boolean),
-    days:     [...new Set(S.filtered.map(r=>r.date))].filter(d=>d && d!=="(нет даты)")
+  const uniqs = {
+    projects: uniq(S.filtered.map(r=>r.projectDisp)).filter(Boolean),
+    people:   uniq(S.filtered.map(r=>r.personDisp)).filter(Boolean),
+    types:    uniq(S.filtered.map(r=>r.typeDisp)).filter(Boolean),
+    days:     uniq(S.filtered.map(r=>r.date)).filter(d=>d && d!=="(нет даты)")
   };
-
   const pk = el.project.value, tk = el.type.value, sk = el.person.value;
+  const only = { person: sk!=='*' && pk==='*' && tk==='*',
+                 project: pk!=='*' && sk==='*' && tk==='*',
+                 type: tk!=='*' && pk==='*' && sk==='*' };
+  const comboCount = (pk!=='*') + (tk!=='*') + (sk!=='*');
   const ctx = contextLabel();
-  const byDay = t.filter(aq.escape(d=>d.date!=="(нет даты)")).groupby("date").rollup({h:d=>aq.op.sum(d.hours)}).orderby("date").objects();
-  const peak = byDay.length ? [...byDay].sort((a,b)=>b.h-a.h)[0] : null;
-  const avgPerDay = byDay.length ? (totalHours/byDay.length) : 0;
 
-  const block = [];
-  block.push(`ОТЧЁТ ПО ТЕКУЩЕЙ ВЫБОРКЕ${ctx ? ` — ${ctx}` : ""}`);
-  block.push(``);
-  block.push(`Сводные показатели:`);
-  block.push(`• Всего записей: ${recs}`);
-  block.push(`• Всего часов: ${fmt2(totalHours)}`);
-  block.push(`• Проектов: ${uniq.projects.length} · Исполнителей: ${uniq.people.length} · Видов работ: ${uniq.types.length} · Дней: ${uniq.days.length}`);
-  if (peak){ block.push(`• Пиковый день: ${peak.date} — ${fmt2(peak.h)} ч · Среднее по дню: ${fmt2(avgPerDay)} ч`); }
+  const lines = [];
+  // 0) Заголовок
+  lines.push(`ОТЧЁТ ПО ТЕКУЩЕЙ ВЫБОРКЕ${ctx ? ` — ${ctx}` : ""}`);
+  lines.push(``);
 
-  // Базовые топы
+  // 1) Краткая выжимка
+  const byDayFull = buildDailySeries(S.filtered);
+  const peak = byDayFull.length ? [...byDayFull].sort((a,b)=>b.h-a.h)[0] : null;
+  const avgPerDay = byDayFull.length ? (totalHours/byDayFull.length) : 0;
+  const trend = linearTrend(byDayFull);
+  const trendTxt = trend.ok ? (trend.change>0.05 ? `рост (${(trend.change*100).toFixed(1)}%)`
+                       : (trend.change<-0.05 ? `снижение (${(trend.change*100).toFixed(1)}%)` : `без выраженного тренда`))
+                       : `недостаточно точек для тренда`;
+  lines.push(`За период отработано ${totalHours.toFixed(2)} ч по ${uniqs.projects.length} проекта(м), ${uniqs.people.length} исполнител(ям), ${uniqs.types.length} виду(ам) работ.`);
+  if (peak) lines.push(`Пиковый день: ${peak.date} — ${peak.h.toFixed(2)} ч; среднее по дню: ${avgPerDay.toFixed(2)} ч; тренд: ${trendTxt}.`);
+  lines.push(``);
+
+  // 2) СВОДНЫЕ
+  lines.push(`СВОДНЫЕ ПОКАЗАТЕЛИ`);
+  lines.push(`• Всего записей: ${recs}`);
+  lines.push(`• Дней с данными: ${uniqs.days.length}`);
+  lines.push(`• Разнообразие: проекты=${uniqs.projects.length} · исполнители=${uniqs.people.length} · виды=${uniqs.types.length}`);
+  lines.push(``);
+
+  // 3) Фокусы/Комбинации
+  if (only.project){
+    const projName = labelByKey('project', pk);
+    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    lines.push(`ФОКУС: ПРОЕКТ — ${projName}`);
+    lines.push(`• Итого часов по проекту: ${totalHours.toFixed(2)}`);
+    lines.push(`• Топ исполнителей:`); lines.push(listBlock(byPers.slice(0,10), totalHours));
+    lines.push(`• Структура по видам работ:`); lines.push(listBlock(byType.slice(0,10), totalHours));
+    lines.push(``);
+  } else if (only.person){
+    const personName = labelByKey('person', sk);
+    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    lines.push(`ФОКУС: ИСПОЛНИТЕЛЬ — ${personName}`);
+    lines.push(`• Итого часов: ${totalHours.toFixed(2)}`);
+    lines.push(`• Распределение по проектам:`); lines.push(listBlock(byProj.slice(0,10), totalHours));
+    lines.push(`• Распределение по видам работ:`); lines.push(listBlock(byType.slice(0,10), totalHours));
+    lines.push(``);
+  } else if (only.type){
+    const typeName = labelByKey('type', tk);
+    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+    lines.push(`ФОКУС: ВИД РАБОТ — ${typeName}`);
+    lines.push(`• Итого часов: ${totalHours.toFixed(2)}`);
+    lines.push(`• Проекты:`); lines.push(listBlock(byProj.slice(0,10), totalHours));
+    lines.push(`• Исполнители:`); lines.push(listBlock(byPers.slice(0,10), totalHours));
+    lines.push(``);
+  } else if (comboCount===2){
+    if (pk!=='*' && sk!=='*'){
+      const projName = labelByKey('project', pk);
+      const personName = labelByKey('person', sk);
+      const sum = (t.rollup({h:d=>aq.op.sum(d.hours)}).objects()[0]||{h:0}).h||0;
+      const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+      lines.push(`ФОКУС: ПРОЕКТ × ИСПОЛНИТЕЛЬ — ${projName} × ${personName}`);
+      lines.push(`• Итого часов по сочетанию: ${sum.toFixed(2)}`);
+      lines.push(`• Виды работ:`); lines.push(listBlock(byType.slice(0,10), sum||1));
+      lines.push(``);
+    }
+    if (pk!=='*' && tk!=='*' && sk==='*'){
+      const projName = labelByKey('project', pk);
+      const typeName = labelByKey('type', tk);
+      const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+      lines.push(`ФОКУС: ПРОЕКТ × ВИД — ${projName} × ${typeName}`);
+      lines.push(`• Исполнители:`); lines.push(listBlock(byPers.slice(0,10), totalHours));
+      lines.push(``);
+    }
+    if (tk!=='*' && sk!=='*' && pk==='*'){
+      const typeName = labelByKey('type', tk);
+      const personName = labelByKey('person', sk);
+      const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
+      lines.push(`ФОКУС: ВИД × ИСПОЛНИТЕЛЬ — ${typeName} × ${personName}`);
+      lines.push(`• Проекты:`); lines.push(listBlock(byProj.slice(0,10), totalHours));
+      lines.push(``);
+    }
+  } else if (comboCount===3){
+    const projName = labelByKey('project', pk);
+    const typeName = labelByKey('type', tk);
+    const personName = labelByKey('person', sk);
+    lines.push(`УЗКИЙ ФОКУС: ${projName} × ${typeName} × ${personName}`);
+    lines.push(`• Итого часов по сочетанию: ${totalHours.toFixed(2)}`);
+    lines.push(``);
+  }
+
+  // 4) Топ-списки
   const projTop = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects().slice(0,10);
   const peopTop = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects().slice(0,10);
   const typeTop = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects().slice(0,10);
+  lines.push(`TOP-10 ПРОЕКТОВ`);
+  lines.push(listBlock(projTop, totalHours));
+  lines.push(``);
+  lines.push(`TOP-10 ИСПОЛНИТЕЛЕЙ`);
+  lines.push(listBlock(peopTop, totalHours));
+  lines.push(``);
+  lines.push(`TOP-10 ВИДОВ РАБОТ`);
+  lines.push(listBlock(typeTop, totalHours));
+  lines.push(``);
 
-  // Сценарии
-  const only = {
-    person: sk!=='*' && pk==='*' && tk==='*',
-    project: pk!=='*' && sk==='*' && tk==='*',
-    type: tk!=='*' && pk==='*' && sk==='*'
-  };
-  const combo = (pk!=='*') + (tk!=='*') + (sk!=='*');
-
-  block.push(``);
-
-  if (only.person){
-    block.push(`Фокус: исполнитель — ${labelByKey('person', sk)}`);
-    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    block.push(`• Распределение часов по проектам:`);
-    block.push(listBlock(byProj, totalHours));
-    block.push(`• Распределение часов по видам работ:`);
-    block.push(listBlock(byType, totalHours));
-  } else if (only.project){
-    block.push(`Фокус: проект — ${labelByKey('project', pk)}`);
-    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    block.push(`• Топ исполнителей в проекте:`);
-    block.push(listBlock(byPers, totalHours));
-    block.push(`• Структура по видам работ в проекте:`);
-    block.push(listBlock(byType, totalHours));
-  } else if (only.type){
-    block.push(`Фокус: вид работ — ${labelByKey('type', tk)}`);
-    const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-    block.push(`• Проекты с данным видом работ:`);
-    block.push(listBlock(byProj, totalHours));
-    block.push(`• Исполнители по данному виду работ:`);
-    block.push(listBlock(byPers, totalHours));
-  } else if (combo>=2){
-    // Комбинированные фильтры — показываем срезы, релевантные комбинации
-    if (pk!=='*' && sk!=='*'){
-      block.push(`Фокус: проект ${labelByKey('project', pk)} × исполнитель ${labelByKey('person', sk)}`);
-      const sum = (t.rollup({h:d=>aq.op.sum(d.hours)}).objects()[0]||{h:0}).h||0;
-      block.push(`• Итого часов по сочетанию: ${fmt2(sum)}`);
-      const byType = t.groupby("typeDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-      block.push(`• Виды работ в сочетании:`);
-      block.push(listBlock(byType, sum||1));
-    }
-    if (pk!=='*' && tk!=='*' && sk==='*'){
-      block.push(`Фокус: проект ${labelByKey('project', pk)} × вид ${labelByKey('type', tk)}`);
-      const byPers = t.groupby("personDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-      block.push(`• Исполнители в данном сочетании:`);
-      block.push(listBlock(byPers, totalHours));
-    }
-    if (tk!=='*' && sk!=='*' && pk==='*'){
-      block.push(`Фокус: вид ${labelByKey('type', tk)} × исполнитель ${labelByKey('person', sk)}`);
-      const byProj = t.groupby("projectDisp").rollup({h:d=>aq.op.sum(d.hours)}).orderby(aq.desc("h")).objects();
-      block.push(`• Проекты в данном сочетании:`);
-      block.push(listBlock(byProj, totalHours));
-    }
+  // 5) Динамика
+  if (byDayFull.length>=8){
+    const peak2 = [...byDayFull].sort((a,b)=>b.h-a.h)[0];
+    const min2  = [...byDayFull].filter(p=>p.h>0).sort((a,b)=>a.h-b.h)[0] || null;
+    const sumSeries = byDayFull.reduce((acc,p)=>acc+p.h,0);
+    const avg2 = sumSeries/byDayFull.length;
+    lines.push(`ДИНАМИКА ПО ДНЯМ`);
+    lines.push(`• Точек: ${byDayFull.length} · Среднее: ${avg2.toFixed(2)} ч/день · Пик: ${peak2.date} — ${peak2.h.toFixed(2)} ч`);
+    if (min2) lines.push(`• Минимум (ненулевой): ${min2.date} — ${min2.h.toFixed(2)} ч`);
+    lines.push(`• Тренд: ${trendTxt}`);
+    lines.push(``);
   } else {
-    // Общий отчёт (без узкого фокуса)
-    block.push(`Top-10 проектов (часы и доля):`);
-    block.push(listBlock(projTop, totalHours));
-    block.push(``);
-    block.push(`Top-10 исполнителей (часы и доля):`);
-    block.push(listBlock(peopTop, totalHours));
-    block.push(``);
-    block.push(`Top-10 видов работ (часы и доля):`);
-    block.push(listBlock(typeTop, totalHours));
+    lines.push(`ДИНАМИКА ПО ДНЯМ`);
+    lines.push(`• Недостаточно точек для тренда (минимум 8).`);
+    lines.push(``);
   }
 
-  block.push(``);
-  block.push(`Примечание: все значения рассчитываются по текущим фильтрам и периоду.`);
+  // 6) Дополнительно — аномалии, тихие зоны, дисбаланс, качество данных
+  const anomalies = detectAnomalies(byDayFull, 7, 1.5, 1.3);
+  if (anomalies.length){
+    lines.push(`АНОМАЛИИ / ПЕРЕРАБОТКИ`);
+    lines.push(`• Дни с превышением порога:`);
+    anomalies.slice(0,10).forEach(a=>{
+      lines.push(`  - ${a.date}: ${a.h.toFixed(2)} ч (порог ~ ${(Math.max(a.mu*1.3, a.mu+1.5*a.sd)).toFixed(2)} ч)`);
+    });
+    if (anomalies.length>10) lines.push(`  … и ещё ${anomalies.length-10}`);
+    lines.push(``);
+  }
 
-  el.reportText.textContent = block.join("\n");
+  const quiet = detectQuietZones(byDayFull, 3);
+  if (quiet.length){
+    lines.push(`ТИХИЕ ЗОНЫ / НЕДОЗАГРУЗКА`);
+    quiet.slice(0,10).forEach(z=>{
+      lines.push(`• ${z.from} — ${z.to} (${z.len} дн.)`);
+    });
+    if (quiet.length>10) lines.push(`… и ещё ${quiet.length-10}`);
+    lines.push(``);
+  }
+
+  const imbProj = imbalanceInfo(projTop.map(o=>({h:o.h, label:o.projectDisp})), 3, 0.60);
+  if (imbProj.trigger){
+    lines.push(`ДИСБАЛАНС / КОНЦЕНТРАЦИЯ`);
+    lines.push(`• Доля топ-3 проектов: ${(imbProj.share*100).toFixed(1)}%`);
+    lines.push(`• Топ-3:`);
+    imbProj.top.forEach((r,i)=>lines.push(`  ${i+1}) ${r.label}: ${r.h.toFixed(2)} ч`));
+    lines.push(``);
+  }
+
+  const dq = (function(){
+    let noDate=0, zeroH=0, negH=0, emptyProj=0, emptyType=0, emptyPerson=0;
+    for (const r of S.filtered){
+      if (!r.date || r.date==="(нет даты)") noDate++;
+      if (!Number.isFinite(r.hours) || r.hours===0) zeroH++;
+      if (Number.isFinite(r.hours) && r.hours<0) negH++;
+      if (!r.projectDisp || r.projectDisp==="(не задано)") emptyProj++;
+      if (!r.typeDisp || r.typeDisp==="(не задано)") emptyType++;
+      if (!r.personDisp || r.personDisp==="(не задано)") emptyPerson++;
+    }
+    return {noDate, zeroH, negH, emptyProj, emptyType, emptyPerson};
+  })();
+  if (dq.noDate || dq.zeroH || dq.negH || dq.emptyProj || dq.emptyType || dq.emptyPerson){
+    lines.push(`КАЧЕСТВО ДАННЫХ`);
+    if (dq.noDate)     lines.push(`• Без даты: ${dq.noDate} записей`);
+    if (dq.zeroH)      lines.push(`• Нулевые часы: ${dq.zeroH} записей`);
+    if (dq.negH)       lines.push(`• Отрицательные часы: ${dq.negH} записей`);
+    if (dq.emptyProj)  lines.push(`• Пустой проект: ${dq.emptyProj} записей`);
+    if (dq.emptyType)  lines.push(`• Пустой вид работ: ${dq.emptyType} записей`);
+    if (dq.emptyPerson)lines.push(`• Пустой исполнитель: ${dq.emptyPerson} записей`);
+    lines.push(``);
+  }
+
+  // 7) Примечания
+  lines.push(`ПРИМЕЧАНИЯ`);
+  lines.push(`• Все значения рассчитаны по текущим фильтрам и периоду.`);
+  lines.push(`• Пороги: аномалии — >130% скользящего среднего (окно 7 дней) или >1.5σ; тихие зоны — ≥3 подряд дней с 0 ч; дисбаланс — доля топ-3 проектов ≥60%.`);
+
+  el.reportText.textContent = lines.join("\n");
 }
-function listBlock(arr,total){
-  if (!arr.length) return "—";
-  return arr.map((r,i)=>{
-    const label = r.projectDisp ?? r.personDisp ?? r.typeDisp ?? r.date ?? "(не задано)";
-    const h = r.h ?? 0;
-    const share = total>0 ? (h/total*100) : 0;
-    return `${String(i+1).padStart(2,"0")}. ${label}: ${fmt2(h)} ч (${share.toFixed(1)}%)`;
-  }).join("\n");
-}
 
-/* ====== СВЯЗЬ ====== */
-el.file.addEventListener("change", (e)=>{ const f = e.target.files?.[0]; if (!f){ el.status.textContent = "Файл не выбран"; return; } S.stack.length=0; S.fwd.length=0; updateHistoryButtons(); parseWorkbook(f, -1); });
-el.btnExportRaw.addEventListener("click", exportCSVRaw);
-
-window.addEventListener("load", ()=>{
-  const ok = !!(window.XLSX && window.aq && window.dayjs);
-  el.status.textContent = ok ? "Готово к загрузке файла" : "Не найдены библиотеки xlsx/arquero/dayjs";
-  syncRightHeight();
+/* ========= ДЕЙСТВИЯ ========= */
+el.apply.addEventListener('click', ()=> applyFilters());
+el.reset.addEventListener('click', ()=>{
+  if (!S.raw.length) return;
+  el.project.value='*'; el.type.value='*'; el.person.value='*';
+  // восстановим даты
+  const dates = S.raw.map(r=>r.date).filter(x=>x && x!=='(нет даты)');
+  if (dates.length){
+    const min = dates.slice().sort()[0];
+    const max = dates.slice().sort().reverse()[0];
+    el.from.value = min; el.to.value = max;
+  } else { el.from.value=''; el.to.value=''; }
+  applyFilters();
 });
-window.addEventListener("resize", syncRightHeight);
-window.addEventListener("mousemove", e=>{
-  if (!e.target.closest || !e.target.closest('svg, rect, circle')) hideTip();
+el.clear.addEventListener('click', ()=>{
+  S.raw=[]; S.filtered=[]; S.wb=null; S.sheets=[];
+  el.file.value=''; el.sheet.innerHTML='';
+  el.from.value=''; el.to.value='';
+  el.project.innerHTML=''; el.type.innerHTML=''; el.person.innerHTML='';
+  renderAll();
+});
+
+// экспорт отчёта
+el.copy.addEventListener('click', async ()=>{
+  const txt = el.reportText.textContent || '';
+  try{ await navigator.clipboard.writeText(txt); }catch(_){}
+});
+el.txt.addEventListener('click', ()=>{
+  const blob = new Blob([el.reportText.textContent||''], {type:'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'report.txt';
+  document.body.appendChild(a); a.click(); a.remove();
 });
 </script>
 </body>
